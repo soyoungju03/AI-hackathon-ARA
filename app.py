@@ -309,3 +309,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+else:
+    # Hugging Face Spaces에서 직접 앱을 실행할 때 사용됩니다
+    # Hugging Face Spaces는 app.py를 찾아서 자동으로 이 객체를 배포합니다
+    demo = create_gradio_interface()
