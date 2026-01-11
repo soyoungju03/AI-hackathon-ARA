@@ -176,26 +176,7 @@ AI-Research-Assistant/
    - Name: `OPENAI_API_KEY`
    - Value: `sk-your-api-key`
 
-## 🗺️ 로드맵
-
-### Phase 1 ✅ (현재)
-- [x] LangGraph 워크플로우 구현
-- [x] ReAct 패턴 적용
-- [x] Human-in-the-Loop (Interrupt)
-- [x] arXiv 검색 도구 개선
-
-### Phase 2 (예정)
-- [ ] 다중 논문 소스 (Semantic Scholar, PubMed)
-- [ ] Weaviate Vector DB 연동
-- [ ] 연관성 평가 알고리즘 고도화
-
-### Phase 3 (예정)
-- [ ] Short-term / Long-term Memory
-- [ ] 웹 검색 통합 (Tavily)
-- [ ] 국내 논문 검색 (DBpia, RISS)
-
 ## 📝 주요 개념 설명
-
 ### ReAct 패턴이란?
 
 ReAct는 **Reasoning + Acting**의 약자로, AI가 문제를 해결하는 과정을 명시적으로 표현합니다:
@@ -213,23 +194,3 @@ AI 워크플로우 중간에 사용자가 개입하여 방향을 조정할 수 �
 - 검색 키워드의 정확성 확인
 - 사용자 의도에 맞는 결과 보장
 - AI의 판단 오류 방지
-
-## 🤝 기여하기
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 라이선스
-
-MIT License - 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
-## 📞 문의
-
-프로젝트에 대한 질문이나 제안이 있으시면 Issues를 통해 연락해주세요.
-
----
-
-**Made with ❤️ for AI Hackathon**
