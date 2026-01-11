@@ -176,23 +176,6 @@ AI-Research-Assistant/
    - Name: `OPENAI_API_KEY`
    - Value: `sk-your-api-key`
 
-## 🗺️ 로드맵
-
-### Phase 1 ✅ (현재)
-- [x] LangGraph 워크플로우 구현
-- [x] ReAct 패턴 적용
-- [x] Human-in-the-Loop (Interrupt)
-- [x] arXiv 검색 도구 개선
-
-### Phase 2 (예정)
-- [ ] 다중 논문 소스 (Semantic Scholar, PubMed)
-- [ ] Weaviate Vector DB 연동
-- [ ] 연관성 평가 알고리즘 고도화
-
-### Phase 3 (예정)
-- [ ] Short-term / Long-term Memory
-- [ ] 웹 검색 통합 (Tavily)
-- [ ] 국내 논문 검색 (DBpia, RISS)
 
 ## 📝 주요 개념 설명
 
