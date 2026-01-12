@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 LangGraph 노드 정의
 ===================
@@ -125,31 +126,33 @@ DOMAIN: 연구 도메인
 """
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def analyze_question_node(state: AgentState) -> dict:
     """
     사용자 질문을 분석하여 키워드, 의도, 도메인을 추출합니다.
-    
-    이 노드는 ReAct 패턴에서 Thought와 Action을 담당합니다:
-    - Thought: 질문을 어떻게 분석할지 계획
-    - Action: LLM을 호출하여 실제 분석 수행
-    
-    Args:
-        state: 현재 워크플로우 상태
-    
-    Returns:
-        dict: 추출된 키워드, 의도, 도메인을 포함한 상태 업데이트
     """
     user_question = state["user_question"]
     
-    # LLM 호출
-    llm = get_llm(settings.light_model)  # 가벼운 모델 사용 (비용 절감)
+    # 로깅: 분석 시작
+    logger.info(f"🔍 질문 분석 시작: {user_question}")
     
+    # LLM 호출
+    llm = get_llm(settings.light_model)
     prompt = QUESTION_ANALYSIS_PROMPT.format(question=user_question)
+    
+    # 로깅: LLM 호출 전
+    logger.info("📡 LLM에 요청 전송 중...")
     
     response = llm.invoke([
         SystemMessage(content="당신은 학술 연구 질문 분석 전문가입니다."),
         HumanMessage(content=prompt)
     ])
+    
+    # 로깅: LLM 응답 수신
+    logger.info(f"✅ LLM 응답 수신: {response.content[:100]}...")
     
     # 응답 파싱
     response_text = response.content
@@ -168,6 +171,11 @@ def analyze_question_node(state: AgentState) -> dict:
             intent = line.replace("INTENT:", "").strip()
         elif line.startswith("DOMAIN:"):
             domain = line.replace("DOMAIN:", "").strip()
+    
+    # 로깅: 파싱 완료
+    logger.info(f"🔑 추출된 키워드: {keywords}")
+    logger.info(f"🎯 질문 의도: {intent}")
+    logger.info(f"📚 연구 도메인: {domain}")
     
     # ReAct Observation 기록
     observation_content = f"""
