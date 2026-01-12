@@ -602,58 +602,7 @@ AI-Research-Assistant/
 
 ---
 
-## 9. 개발 로드맵
-
-### Phase 1: 기반 구축 (1주차)
-- [ ] 프로젝트 구조 설정
-- [ ] LangGraph 기본 워크플로우 구현
-- [ ] arXiv 검색 도구 개선
-- [ ] 기본 ReAct 패턴 적용
-
-### Phase 2: 핵심 기능 (2주차)
-- [ ] Human-in-the-Loop (Interrupt) 구현
-- [ ] 다중 논문 소스 추가 (Semantic Scholar, PubMed)
-- [ ] 연관성 평가 알고리즘 구현
-- [ ] Weaviate 연동
-
-### Phase 3: 메모리 & 고도화 (3주차)
-- [ ] Short-term Memory 구현
-- [ ] Long-term Memory 구현
-- [ ] 웹 검색 통합
-- [ ] Function Calling 고도화
-
-### Phase 4: UI & 배포 (4주차)
-- [ ] FastAPI + Gradio UI 완성
-- [ ] Docker 구성
-- [ ] Hugging Face Spaces 배포
-- [ ] 테스트 및 버그 수정
-
----
-
-## 10. 현재 문제점 및 해결 방안
-
-### 10.1 Hugging Face 배포 에러
-**문제**: `OPENAI_API_KEY` 환경 변수 미설정
-**해결**: Hugging Face Spaces의 Settings > Repository secrets에 API 키 등록
-
-### 10.2 Human-in-the-Loop 미적용
-**문제**: 사용자 개입 없이 자동 진행
-**해결**: LangGraph의 `interrupt_before` 기능 활용
-
-### 10.3 낮은 논문 연관성
-**문제**: 2,3번째 논문이 주제와 무관
-**해결**: 
-1. Semantic similarity 기반 필터링 추가
-2. 검색 결과에 대한 LLM 재평가
-3. 사용자 피드백 반영
-
-### 10.4 제한된 논문 소스
-**문제**: arXiv만 사용
-**해결**: 다중 소스 통합 (Semantic Scholar, PubMed, CORE 등)
-
----
-
-## 11. 부록
+## 9. 부록
 
 ### A. ReAct 패턴 상세
 
