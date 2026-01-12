@@ -88,7 +88,7 @@ def process_chat_message(
     has_key, key_or_message = check_api_key()
     
     if not has_key:
-        history.append((message, key_or_message))
+        history.append([message, key_or_message])
         return "", history, state
     
     # 세션 ID 설정
@@ -144,7 +144,7 @@ def process_chat_message(
             else:
                 response = f"❌ 오류: {result.get('message', '알 수 없는 오류')}"
         
-        history.append((message, response))
+        history.append([message, response])
         
     except ImportError as e:
         error_msg = f"""
@@ -154,11 +154,11 @@ def process_chat_message(
         
         requirements.txt를 확인해주세요.
         """
-        history.append((message, error_msg))
+        history.append([message, error_msg])
     
     except Exception as e:
         error_msg = f"❌ **오류가 발생했습니다**: {str(e)}"
-        history.append((message, error_msg))
+        history.append([message, error_msg])
     
     return "", history, state
 
