@@ -188,23 +188,19 @@ def quick_search(question: str, paper_count: int) -> str:
 # Gradio 인터페이스
 # ============================================
 
+# ============================================
+# Gradio 테마 설정
+# ============================================
+
+theme = gr.themes.Soft(
+    primary_hue="blue",
+    secondary_hue="slate",
+)
+
 def create_app():
     """Gradio 앱을 생성합니다."""
     
-    theme = gr.themes.Soft(
-        primary_hue="blue",
-        secondary_hue="slate",
-    )
-    
-    with gr.Blocks(
-        title="📚 AI Research Assistant",
-        theme=theme,
-        css="""
-        .container { max-width: 1200px; margin: auto; }
-        footer { display: none !important; }
-        """
-    ) as demo:
-        
+    with gr.Blocks(title="📚 AI Research Assistant") as demo:
         # 헤더
         gr.Markdown("""
         # 📚 AI Research Assistant
@@ -235,7 +231,6 @@ def create_app():
                 chatbot = gr.Chatbot(
                     height=450,
                     show_label=False,
-                    bubble_full_width=False,
                     avatar_images=(None, "https://em-content.zobj.net/source/twitter/376/robot_1f916.png")
                 )
                 
@@ -394,5 +389,10 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=False
+        share=False,
+        theme=theme,
+        css="""
+        .container { max-width: 1200px; margin: auto; }
+        footer { display: none !important; }
+        """
     )
