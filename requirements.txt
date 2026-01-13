@@ -30,3 +30,8 @@ httpx>=0.26.0
 
 # === Utilities ===
 typing-extensions>=4.9.0
+
+weaviate-client==4.1.1
+arxiv==1.4.7
+sentence-transformers==3.0.0
+openai>=1.0.0

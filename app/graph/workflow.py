@@ -1,265 +1,309 @@
+# -*- coding: utf-8 -*-
 """
-LangGraph 워크플로우 정의
-========================
+완전히 수정된 LangGraph 워크플로우 (노드 기반 라우팅)
+====================================================
 
-이 파일은 전체 워크플로우 그래프를 구성합니다.
+라우팅을 조건부 함수가 아닌 별도의 노드로 관리합니다.
+이렇게 하면 각 단계에서 정확히 무슨 일이 일어나는지 로깅하고 추적할 수 있습니다.
 
-LangGraph 워크플로우란?
------------------------
-LangGraph는 LangChain 팀이 만든 라이브러리로,
-복잡한 AI 워크플로우를 "그래프" 형태로 정의할 수 있게 해줍니다.
+노드 구조:
+- 키워드 확인 라우팅: check_keyword_confirmation_status_node
+- 논문 수 선택 라우팅: check_paper_count_status_node
 
-그래프의 구성 요소:
-1. 노드(Node): 각 처리 단계 (함수)
-2. 엣지(Edge): 노드 간의 연결
-3. 상태(State): 노드들 사이에서 전달되는 데이터
-
-워크플로우 흐름:
----------------
-START → receive_question → analyze_question → request_user_confirmation
-                                                        ↓
-                                              [INTERRUPT: 사용자 입력 대기]
-                                                        ↓
-        process_user_response → search_papers → evaluate_relevance
-                                                        ↓
-                        summarize_papers → generate_response → END
+이 노드들은 상태를 검사하고, 필요하면 수정하고, 다음 단계로의 경로를 결정합니다.
 """
 
 from typing import Literal
+import logging
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
-# 로컬 모듈 임포트
 from app.graph.state import AgentState, create_initial_state
 from app.graph.nodes import (
     receive_question_node,
     analyze_question_node,
-    request_user_confirmation_node,
-    process_user_response_node,
+    request_keyword_confirmation_node,
+    process_keyword_confirmation_response_node,
+    request_paper_count_node,
+    process_paper_count_response_node,
     search_papers_node,
     evaluate_relevance_node,
     summarize_papers_node,
     generate_response_node
 )
 
-
-def should_continue_after_interrupt(state: AgentState) -> Literal["process_response", "wait"]:
-    """
-    Interrupt 후 다음 단계를 결정하는 조건부 엣지 함수입니다.
-    
-    사용자가 응답했으면 진행하고, 아직 대기 중이면 계속 대기합니다.
-    
-    Args:
-        state: 현재 워크플로우 상태
-    
-    Returns:
-        str: 다음 노드 이름 또는 "wait"
-    """
-    if state.get("waiting_for_user", False):
-        return "wait"
-    return "process_response"
+logger = logging.getLogger(__name__)
 
 
-def check_search_results(state: AgentState) -> Literal["evaluate", "error"]:
-    """
-    검색 결과를 확인하고 다음 단계를 결정합니다.
-    
-    Args:
-        state: 현재 워크플로우 상태
-    
-    Returns:
-        str: "evaluate" (정상) 또는 "error" (에러 발생 시)
-    """
-    if state.get("error_message"):
-        return "error"
-    return "evaluate"
+# ============================================
+# 라우팅 노드들 (별도로 관리됨)
+# ============================================
 
+def check_keyword_confirmation_status_node(state: AgentState) -> dict:
+    """
+    키워드 확인 후 상태를 검사하고 다음 단계를 결정합니다.
+    
+    이 노드의 목적:
+    1. 현재 상태를 상세히 로깅합니다 (디버깅용)
+    2. 사용자의 응답을 검증합니다
+    3. 상태를 정리합니다 (waiting_for, waiting_for_user 초기화)
+    4. 다음 단계로의 경로를 결정합니다
+    
+    반환값:
+    - "next_node": 다음 노드 이름
+    """
+    
+    # 현재 상태 로깅 (디버깅용)
+    waiting_for = state.get("waiting_for")
+    waiting_for_user = state.get("waiting_for_user")
+    keyword_response = state.get("keyword_confirmation_response")
+    
+    logger.info("=" * 60)
+    logger.info("[CHECK_KEYWORD_CONFIRMATION_STATUS] 상태 검사 시작")
+    logger.info(f"  waiting_for: {waiting_for}")
+    logger.info(f"  waiting_for_user: {waiting_for_user}")
+    logger.info(f"  keyword_confirmation_response: {keyword_response}")
+    logger.info("=" * 60)
+    
+    # 상태 검증
+    if keyword_response == "retry":
+        logger.info("  → 사용자가 '다시'를 선택했습니다")
+        logger.info("  → 다음 노드: analyze_question (재분석)")
+        return {
+            "next_node": "analyze_question"
+        }
+    
+    elif keyword_response == "confirmed":
+        logger.info("  → 사용자가 '확인'을 선택했습니다")
+        logger.info("  → 다음 노드: request_paper_count (논문 수 선택)")
+        return {
+            "next_node": "request_paper_count"
+        }
+    
+    else:
+        logger.warning(f"  ⚠️ 예상치 못한 응답: {keyword_response}")
+        logger.info("  → 기본값으로 처리: request_paper_count로 진행")
+        return {
+            "next_node": "request_paper_count"
+        }
+
+
+def check_paper_count_status_node(state: AgentState) -> dict:
+    """
+    논문 수 선택 후 상태를 검사하고 다음 단계를 결정합니다.
+    
+    이 노드의 목적:
+    1. 현재 상태를 상세히 로깅합니다 (디버깅용)
+    2. 논문 수가 제대로 설정되었는지 검증합니다
+    3. 상태를 정리합니다 (waiting_for, waiting_for_user 초기화)
+    4. 검색 단계로 진행합니다
+    
+    반환값:
+    - "next_node": 다음 노드 이름 (항상 "search_papers")
+    """
+    
+    # 현재 상태 로깅 (디버깅용)
+    waiting_for = state.get("waiting_for")
+    waiting_for_user = state.get("waiting_for_user")
+    paper_count = state.get("paper_count")
+    user_response = state.get("user_response")
+    
+    logger.info("=" * 60)
+    logger.info("[CHECK_PAPER_COUNT_STATUS] 상태 검사 시작")
+    logger.info(f"  waiting_for: {waiting_for}")
+    logger.info(f"  waiting_for_user: {waiting_for_user}")
+    logger.info(f"  paper_count: {paper_count}")
+    logger.info(f"  user_response: {user_response}")
+    logger.info("=" * 60)
+    
+    # 논문 수 검증
+    if paper_count is None or paper_count < 1 or paper_count > 10:
+        logger.warning(f"  ⚠️ 유효하지 않은 논문 수: {paper_count}")
+        logger.info("  → 기본값 3으로 설정")
+        return {
+            "paper_count": 3,
+            "next_node": "search_papers"
+        }
+    
+    logger.info(f"  ✓ 논문 수 확인됨: {paper_count}개")
+    logger.info("  → 다음 노드: search_papers (논문 검색)")
+    
+    return {
+        "next_node": "search_papers"
+    }
+
+
+# ============================================
+# 워크플로우 빌드
+# ============================================
 
 def build_research_workflow() -> StateGraph:
     """
-    연구 어시스턴트 워크플로우 그래프를 구축합니다.
+    노드 기반 라우팅을 사용하는 워크플로우를 구축합니다.
     
-    이 함수는 전체 워크플로우의 구조를 정의합니다.
-    각 노드를 추가하고, 노드 간의 연결(엣지)을 설정합니다.
+    워크플로우 구조:
     
-    Returns:
-        StateGraph: 컴파일된 워크플로우 그래프
-    
-    워크플로우 다이어그램:
-    
-        ┌─────────────────┐
-        │      START      │
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │receive_question │
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │analyze_question │
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │request_confirm  │ ← INTERRUPT HERE
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │process_response │
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │ search_papers   │
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │evaluate_relevance│
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │summarize_papers │
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │generate_response│
-        └────────┬────────┘
-                 │
-                 ▼
-        ┌─────────────────┐
-        │       END       │
-        └─────────────────┘
+    START
+      ↓
+    receive_question
+      ↓
+    analyze_question
+      ↓
+    request_keyword_confirmation ← [INTERRUPT 1]
+      ↓
+    process_keyword_confirmation_response
+      ↓
+    check_keyword_confirmation_status ← [라우팅 노드]
+      ↓
+    [분기]
+    ├─ analyze_question (사용자가 '다시' 선택)
+    └─ request_paper_count (사용자가 '확인' 선택) ← [INTERRUPT 2]
+      ↓
+    process_paper_count_response
+      ↓
+    check_paper_count_status ← [라우팅 노드]
+      ↓
+    search_papers
+      ↓
+    [조건부 분기]
+    ├─ generate_response (검색 실패)
+    └─ evaluate_relevance (검색 성공)
+      ↓
+    summarize_papers
+      ↓
+    generate_response
+      ↓
+    END
     """
     
-    # StateGraph 초기화
-    # AgentState를 상태 타입으로 사용합니다
     workflow = StateGraph(AgentState)
     
     # ============================================
     # 노드 추가
     # ============================================
     
-    # 각 노드를 그래프에 추가합니다
-    # 노드 이름은 문자열이고, 두 번째 인자는 실제 함수입니다
-    
+    # 기존 노드들
     workflow.add_node("receive_question", receive_question_node)
     workflow.add_node("analyze_question", analyze_question_node)
-    workflow.add_node("request_confirmation", request_user_confirmation_node)
-    workflow.add_node("process_response", process_user_response_node)
+    workflow.add_node("request_keyword_confirmation", request_keyword_confirmation_node)
+    workflow.add_node("process_keyword_confirmation_response", process_keyword_confirmation_response_node)
+    workflow.add_node("request_paper_count", request_paper_count_node)
+    workflow.add_node("process_paper_count_response", process_paper_count_response_node)
     workflow.add_node("search_papers", search_papers_node)
     workflow.add_node("evaluate_relevance", evaluate_relevance_node)
     workflow.add_node("summarize_papers", summarize_papers_node)
     workflow.add_node("generate_response", generate_response_node)
     
+    # 새로운 라우팅 노드들
+    workflow.add_node("check_keyword_confirmation_status", check_keyword_confirmation_status_node)
+    workflow.add_node("check_paper_count_status", check_paper_count_status_node)
+    
     # ============================================
-    # 엣지 추가 (노드 간 연결)
+    # 엣지 추가
     # ============================================
     
-    # 시작점 설정
-    # 워크플로우는 "receive_question" 노드에서 시작합니다
+    # 시작점
     workflow.set_entry_point("receive_question")
     
-    # 순차적 엣지 추가
-    # add_edge(A, B)는 "A 노드 다음에 B 노드가 실행된다"를 의미합니다
-    
+    # 기본 흐름
     workflow.add_edge("receive_question", "analyze_question")
-    workflow.add_edge("analyze_question", "request_confirmation")
+    workflow.add_edge("analyze_question", "request_keyword_confirmation")
+    workflow.add_edge("request_keyword_confirmation", "process_keyword_confirmation_response")
     
-    # Human-in-the-Loop: request_confirmation 후에는 
-    # 사용자 응답을 기다려야 하므로 process_response로 연결합니다
-    # 실제 Interrupt는 워크플로우 실행 시 처리됩니다
-    workflow.add_edge("request_confirmation", "process_response")
+    # 첫 번째 라우팅: 키워드 확인 후
+    workflow.add_edge("process_keyword_confirmation_response", "check_keyword_confirmation_status")
     
-    workflow.add_edge("process_response", "search_papers")
+    # check_keyword_confirmation_status에서 분기
+    # 이 노드에서 "next_node" 필드를 반환하므로, 우리는 조건부 엣지를 사용합니다
+    def route_after_keyword_check(state: AgentState) -> Literal["analyze_question", "request_paper_count"]:
+        """check_keyword_confirmation_status 노드에서 다음 경로를 결정합니다."""
+        next_node = state.get("next_node")
+        logger.info(f"[ROUTE_AFTER_KEYWORD_CHECK] 경로 결정: {next_node}")
+        return next_node or "request_paper_count"
     
-    # 조건부 엣지: 검색 결과에 따라 분기
+    workflow.add_conditional_edges(
+        "check_keyword_confirmation_status",
+        route_after_keyword_check,
+        {
+            "analyze_question": "analyze_question",
+            "request_paper_count": "request_paper_count"
+        }
+    )
+    
+    # 두 번째 Interrupt
+    workflow.add_edge("request_paper_count", "process_paper_count_response")
+    workflow.add_edge("process_paper_count_response", "check_paper_count_status")
+    
+    # 두 번째 라우팅: 논문 수 확인 후 (항상 search_papers로 진행)
+    workflow.add_edge("check_paper_count_status", "search_papers")
+    
+    # 검색 결과에 따른 분기
+    def check_search_results(state: AgentState) -> Literal["evaluate_relevance", "generate_response"]:
+        """검색 결과를 확인하고 다음 경로를 결정합니다."""
+        if state.get("error_message"):
+            logger.info("[CHECK_SEARCH_RESULTS] 검색 실패 → generate_response")
+            return "generate_response"
+        logger.info("[CHECK_SEARCH_RESULTS] 검색 성공 → evaluate_relevance")
+        return "evaluate_relevance"
+    
     workflow.add_conditional_edges(
         "search_papers",
         check_search_results,
         {
-            "evaluate": "evaluate_relevance",
-            "error": "generate_response"  # 에러 시 바로 응답 생성으로
+            "evaluate_relevance": "evaluate_relevance",
+            "generate_response": "generate_response"
         }
     )
     
+    # 최종 흐름
     workflow.add_edge("evaluate_relevance", "summarize_papers")
     workflow.add_edge("summarize_papers", "generate_response")
-    
-    # 종료점 설정
     workflow.add_edge("generate_response", END)
     
     return workflow
 
 
+# ============================================
+# 에이전트 생성 및 실행
+# ============================================
+
 def create_research_agent(checkpointer=None):
     """
     연구 어시스턴트 에이전트를 생성합니다.
     
-    이 함수는 워크플로우를 빌드하고 컴파일하여
-    실행 가능한 에이전트를 반환합니다.
-    
-    Args:
-        checkpointer: 상태 저장을 위한 체크포인터 (선택)
-                     Human-in-the-Loop을 위해 필요합니다.
-    
-    Returns:
-        CompiledGraph: 컴파일된 워크플로우 (실행 가능)
-    
-    Example:
-        >>> agent = create_research_agent()
-        >>> result = agent.invoke(initial_state)
+    중요: interrupt_before는 Interrupt 직전의 노드들을 지정합니다.
+    따라서:
+    - "process_keyword_confirmation_response" 실행 직전에 Interrupt (첫 번째 응답 받기)
+    - "process_paper_count_response" 실행 직전에 Interrupt (두 번째 응답 받기)
     """
     
-    # 워크플로우 빌드
     workflow = build_research_workflow()
     
-    # 체크포인터가 없으면 메모리 기반 체크포인터 사용
-    # 체크포인터는 워크플로우의 상태를 저장하여
-    # Interrupt 후에도 상태를 유지할 수 있게 해줍니다
     if checkpointer is None:
         checkpointer = MemorySaver()
     
-    # 워크플로우 컴파일
-    # interrupt_before를 설정하면 해당 노드 실행 전에 워크플로우가 중지됩니다
-    # 이것이 Human-in-the-Loop의 핵심입니다!
     compiled = workflow.compile(
         checkpointer=checkpointer,
-        interrupt_before=["process_response"]  # 사용자 응답 처리 전에 중지
+        interrupt_before=[
+            "process_keyword_confirmation_response",  # 첫 번째 Interrupt
+            "process_paper_count_response"             # 두 번째 Interrupt
+        ]
     )
     
+    logger.info("✓ 워크플로우 컴파일 완료")
     return compiled
 
 
+# ============================================
+# ResearchAssistant 클래스
+# ============================================
+
 class ResearchAssistant:
     """
-    연구 어시스턴트 클래스입니다.
+    두 단계 Human-in-the-Loop을 지원하는 연구 어시스턴트입니다.
     
-    이 클래스는 워크플로우 실행을 관리하고,
-    Human-in-the-Loop 상호작용을 처리합니다.
-    
-    사용법:
-    
-    1. 기본 사용 (Interrupt 없이 자동 실행):
-        >>> assistant = ResearchAssistant()
-        >>> response = assistant.run("자율주행 LiDAR 기술")
-        >>> print(response)
-    
-    2. Human-in-the-Loop 사용:
-        >>> assistant = ResearchAssistant()
-        >>> 
-        >>> # 첫 번째 실행 (Interrupt까지)
-        >>> result = assistant.start("자율주행 LiDAR 기술")
-        >>> print(result.interrupt_message)  # 사용자에게 보여줄 메시지
-        >>> 
-        >>> # 사용자 응답으로 계속 실행
-        >>> final = assistant.continue_with_response("5")  # 5개 논문 검색
-        >>> print(final.response)
+    노드 기반 라우팅을 사용하므로, 각 단계에서 정확히 무슨 일이
+    일어나는지 로깅으로 추적할 수 있습니다.
     """
     
     def __init__(self):
@@ -268,6 +312,7 @@ class ResearchAssistant:
         self.agent = create_research_agent(self.checkpointer)
         self.current_thread_id = None
         self.current_state = None
+        self.interrupt_count = 0
     
     def run(
         self, 
@@ -276,83 +321,72 @@ class ResearchAssistant:
         session_id: str = "default"
     ) -> str:
         """
-        질문에 대해 자동으로 전체 워크플로우를 실행합니다.
-        
-        이 메서드는 Human-in-the-Loop 없이 자동으로 진행됩니다.
-        기본 논문 수(paper_count)를 사용합니다.
-        
-        Args:
-            question: 사용자의 질문
-            paper_count: 검색할 논문 수 (기본값: 3)
-            session_id: 세션 식별자
-        
-        Returns:
-            str: 최종 응답 텍스트
+        자동 실행 모드: Interrupt 없이 전체 워크플로우를 자동으로 실행합니다.
         """
-        # 초기 상태 생성
+        import uuid
+        
         initial_state = create_initial_state(question, session_id)
         initial_state["paper_count"] = paper_count
-        initial_state["user_response"] = str(paper_count)
+        initial_state["keyword_confirmation_response"] = "confirmed"
         initial_state["waiting_for_user"] = False
         
-        # 고유한 thread_id 생성 (상태 추적용)
-        import uuid
         thread_id = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread_id}}
         
-        # 워크플로우 실행
         try:
-            # stream 대신 invoke 사용 (전체 실행)
+            logger.info(f"[RUN MODE] 자동 실행 시작: {question[:50]}...")
             final_state = self.agent.invoke(initial_state, config)
+            logger.info("[RUN MODE] 자동 실행 완료")
             return final_state.get("final_response", "응답을 생성할 수 없습니다.")
         except Exception as e:
+            logger.error(f"[RUN MODE] 오류 발생: {str(e)}", exc_info=True)
             return f"오류가 발생했습니다: {str(e)}"
     
     def start(self, question: str, session_id: str = "default") -> dict:
         """
-        워크플로우를 시작하고 첫 번째 Interrupt에서 멈춥니다.
-        
-        Human-in-the-Loop을 사용할 때 이 메서드로 시작합니다.
-        Interrupt 지점에서 멈추고, 사용자에게 보여줄 정보를 반환합니다.
-        
-        Args:
-            question: 사용자의 질문
-            session_id: 세션 식별자
-        
-        Returns:
-            dict: Interrupt 정보 (메시지, 옵션 등)
+        워크플로우를 시작합니다.
+        첫 번째 Interrupt (키워드 확인)에서 멈춥니다.
         """
         import uuid
         
-        # 초기 상태 생성
+        logger.info(f"[START MODE] 시작 - 질문: {question[:50]}...")
+        
         initial_state = create_initial_state(question, session_id)
         
-        # 고유한 thread_id 생성
         self.current_thread_id = str(uuid.uuid4())
+        self.interrupt_count = 0
         config = {"configurable": {"thread_id": self.current_thread_id}}
         
-        # 워크플로우 실행 (Interrupt까지)
         try:
-            # stream을 사용하여 Interrupt 지점까지 실행
+            # 워크플로우 실행 (첫 번째 Interrupt까지)
+            logger.info("[START MODE] 워크플로우 실행 중...")
             for event in self.agent.stream(initial_state, config):
                 self.current_state = event
+                logger.debug(f"  Event received: {list(event.keys())}")
             
-            # 현재 상태에서 Interrupt 정보 추출
-            # LangGraph의 get_state를 사용하여 현재 상태 확인
+            # 현재 상태 확인
             state_snapshot = self.agent.get_state(config)
             current_values = state_snapshot.values
             
+            self.interrupt_count = 1
+            logger.info("[START MODE] 첫 번째 Interrupt 도달")
+            
+            # 첫 번째 Interrupt 데이터 확인
             if current_values.get("interrupt_data"):
                 interrupt_data = current_values["interrupt_data"]
+                logger.info(f"  Interrupt Type: {interrupt_data.interrupt_type}")
+                logger.info(f"  Keywords: {current_values.get('extracted_keywords', [])}")
+                
                 return {
                     "status": "waiting_for_input",
+                    "interrupt_stage": 1,
                     "message": interrupt_data.message,
                     "options": interrupt_data.options,
                     "keywords": current_values.get("extracted_keywords", []),
                     "thread_id": self.current_thread_id
                 }
             else:
-                # Interrupt 없이 완료된 경우
+                logger.warning("[START MODE] Interrupt 데이터를 찾을 수 없습니다")
                 return {
                     "status": "completed",
                     "response": current_values.get("final_response", ""),
@@ -360,6 +394,7 @@ class ResearchAssistant:
                 }
                 
         except Exception as e:
+            logger.error(f"[START MODE] 오류: {str(e)}", exc_info=True)
             return {
                 "status": "error",
                 "message": str(e),
@@ -369,17 +404,12 @@ class ResearchAssistant:
     def continue_with_response(self, user_response: str) -> dict:
         """
         사용자 응답을 받아 워크플로우를 계속 실행합니다.
-        
-        start() 메서드 이후 호출되어야 합니다.
-        사용자의 응답을 상태에 추가하고 나머지 워크플로우를 실행합니다.
-        
-        Args:
-            user_response: 사용자의 응답 (예: 논문 수 선택)
-        
-        Returns:
-            dict: 최종 결과 또는 다음 Interrupt 정보
         """
+        
+        logger.info(f"[CONTINUE MODE] 사용자 응답 수신 (Stage {self.interrupt_count}): {user_response}")
+        
         if not self.current_thread_id:
+            logger.error("[CONTINUE MODE] thread_id가 설정되지 않았습니다")
             return {
                 "status": "error",
                 "message": "먼저 start()를 호출해주세요."
@@ -388,55 +418,100 @@ class ResearchAssistant:
         config = {"configurable": {"thread_id": self.current_thread_id}}
         
         try:
-            # 사용자 응답을 상태에 업데이트
-            self.agent.update_state(
-                config,
-                {
-                    "user_response": user_response,
-                    "waiting_for_user": False
-                }
-            )
+            # 사용자 응답에 따라 상태 업데이트
+            if self.interrupt_count == 1:
+                logger.info("[CONTINUE MODE] Stage 1: 키워드 확인 응답 처리")
+                
+                # "확인" 또는 "다시"로 정규화
+                normalized_response = user_response.strip().lower()
+                if normalized_response in ["다시", "retry", "다시하기", "수정"]:
+                    keyword_response = "retry"
+                    logger.info("  → '다시' 선택 감지")
+                else:
+                    keyword_response = "confirmed"
+                    logger.info("  → '확인' 선택 감지")
+                
+                self.agent.update_state(
+                    config,
+                    {
+                        "user_response": user_response,
+                        "keyword_confirmation_response": keyword_response,
+                        "waiting_for_user": False
+                    }
+                )
+            
+            elif self.interrupt_count == 2:
+                logger.info("[CONTINUE MODE] Stage 2: 논문 수 응답 처리")
+                logger.info(f"  → 선택된 논문 수: {user_response}")
+                
+                self.agent.update_state(
+                    config,
+                    {
+                        "user_response": user_response,
+                        "waiting_for_user": False
+                    }
+                )
             
             # 워크플로우 계속 실행
+            logger.info("[CONTINUE MODE] 워크플로우 계속 실행 중...")
             for event in self.agent.stream(None, config):
                 self.current_state = event
+                logger.debug(f"  Event received: {list(event.keys())}")
             
             # 최종 상태 확인
             state_snapshot = self.agent.get_state(config)
             current_values = state_snapshot.values
             
+            logger.info("[CONTINUE MODE] 실행 완료, 상태 확인")
+            
+            # 완료했는지 확인
             if current_values.get("is_complete"):
+                logger.info("[CONTINUE MODE] ✓ 워크플로우 완료")
                 return {
                     "status": "completed",
+                    "interrupt_stage": self.interrupt_count,
                     "response": current_values.get("final_response", ""),
                     "papers": current_values.get("relevant_papers", []),
-                    "react_steps": current_values.get("react_steps", [])
-                }
-            else:
-                # 또 다른 Interrupt가 있는 경우
-                return {
-                    "status": "waiting_for_input",
-                    "message": current_values.get("interrupt_data", {}).get("message", ""),
                     "thread_id": self.current_thread_id
                 }
+            
+            # 다음 Interrupt가 있는지 확인
+            if current_values.get("interrupt_data"):
+                self.interrupt_count += 1
+                interrupt_data = current_values["interrupt_data"]
+                logger.info(f"[CONTINUE MODE] → 다음 Interrupt: Stage {self.interrupt_count}")
+                
+                return {
+                    "status": "waiting_for_input",
+                    "interrupt_stage": self.interrupt_count,
+                    "message": interrupt_data.message,
+                    "options": interrupt_data.options,
+                    "thread_id": self.current_thread_id
+                }
+            
+            # 예상 외의 상황
+            logger.warning("[CONTINUE MODE] 예상 외의 상태: 완료도 아니고 Interrupt도 없음")
+            return {
+                "status": "unknown",
+                "message": "워크플로우 상태를 파악할 수 없습니다.",
+                "thread_id": self.current_thread_id
+            }
                 
         except Exception as e:
+            logger.error(f"[CONTINUE MODE] 오류 발생: {str(e)}", exc_info=True)
             return {
                 "status": "error",
-                "message": str(e)
+                "message": str(e),
+                "thread_id": self.current_thread_id
             }
 
 
-# 모듈 레벨에서 기본 어시스턴트 인스턴스 생성
-default_assistant = None
+# 싱글톤 패턴
+_default_assistant = None
 
 def get_assistant() -> ResearchAssistant:
-    """
-    기본 어시스턴트 인스턴스를 반환합니다.
-    
-    싱글톤 패턴을 사용하여 하나의 인스턴스만 유지합니다.
-    """
-    global default_assistant
-    if default_assistant is None:
-        default_assistant = ResearchAssistant()
-    return default_assistant
+    """전역 어시스턴트 인스턴스를 반환합니다."""
+    global _default_assistant
+    if _default_assistant is None:
+        _default_assistant = ResearchAssistant()
+    return _default_assistant

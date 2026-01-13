@@ -1,27 +1,30 @@
+# -*- coding: utf-8 -*-
 """
-AI Research Assistant - 메인 진입점
-====================================
+완전히 수정된 AI Research Assistant - 메인 진입점
+==================================================
 
-이 파일은 Hugging Face Spaces에서 앱을 실행하기 위한 메인 진입점입니다.
+두 단계 Human-in-the-Loop을 완전히 지원합니다:
+1. 첫 번째 대화: 질문 입력 → 키워드 확인 (확인/다시)
+2. 두 번째 대화: 키워드 확인 응답 → 논문 수 선택 (1-10)
+3. 세 번째 대화: 논문 수 선택 → 최종 응답 생성
+
+세션 기반 상태 관리로 사용자의 대화 흐름을 완벽하게 추적합니다.
 """
 
 import os
 import sys
 import logging
 
-# 현재 디렉토리를 Python 경로에 추가
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gradio as gr
 from gradio import ChatMessage 
-from typing import List, Tuple
+from typing import Tuple
 import uuid
 
-# 환경 변수 로드 (로컬 개발용)
 from dotenv import load_dotenv
 load_dotenv()
 
-# 로깅 설정
 logger = logging.getLogger(__name__)
 
 
@@ -30,41 +33,48 @@ logger = logging.getLogger(__name__)
 # ============================================
 
 def check_api_key():
-    """
-    OpenAI API 키가 설정되어 있는지 확인합니다.
-    
-    Hugging Face Spaces에서는 Settings > Repository secrets에서
-    OPENAI_API_KEY를 설정해야 합니다.
-    """
+    """OpenAI API 키가 설정되어 있는지 확인합니다."""
     api_key = os.getenv("OPENAI_API_KEY")
     
     if not api_key:
         return False, """
-        경고: OPENAI_API_KEY가 설정되지 않았습니다.
-        
-        Hugging Face Spaces 사용자:
-        1. Settings 탭으로 이동
-        2. Repository secrets 섹션 찾기
-        3. OPENAI_API_KEY를 이름으로, API 키를 값으로 추가
-        4. Space를 다시 시작
-        
-        로컬 개발자:
-        1. 프로젝트 루트에 .env 파일 생성
-        2. OPENAI_API_KEY=sk-your-key-here 추가
+경고: OPENAI_API_KEY가 설정되지 않았습니다.
+
+Hugging Face Spaces 사용자:
+1. Settings 탭으로 이동
+2. Repository secrets 섹션 찾기
+3. OPENAI_API_KEY를 이름으로, API 키를 값으로 추가
+4. Space를 다시 시작
+
+로컬 개발자:
+1. 프로젝트 루트에 .env 파일 생성
+2. OPENAI_API_KEY=sk-your-key-here 추가
         """
     
     return True, api_key
 
 
 # ============================================
-# 전역 상태
+# 세션 관리
 # ============================================
 
-session_data = {}
+session_data = {}  # {session_id: {"assistant": ResearchAssistant, "state": {...}}}
+
+
+def get_or_create_session(session_id: str):
+    """세션을 가져오거나 새로 생성합니다."""
+    if session_id not in session_data:
+        from app.graph.workflow import ResearchAssistant
+        session_data[session_id] = {
+            "assistant": ResearchAssistant(),
+            "current_interrupt_stage": 0,  # 0=아직 시작 안함, 1=키워드 확인 대기, 2=논문수 선택 대기
+            "last_user_message": None
+        }
+    return session_data[session_id]
 
 
 # ============================================
-# 채팅 메시지 처리
+# 핵심 채팅 함수
 # ============================================
 
 def process_chat_message(
@@ -73,123 +83,145 @@ def process_chat_message(
     state: dict
 ) -> Tuple[str, list, dict]:
     """
-    채팅 메시지를 처리합니다.
-    LangGraph 워크플로우와 통합되어 Human-in-the-Loop을 지원합니다.
+    사용자의 메시지를 처리합니다.
     
-    Args:
-        message: 사용자의 메시지
-        history: 대화 히스토리
-        state: 세션 상태
+    이 함수는 복잡한 상태 관리를 하고 있습니다:
+    1. 첫 메시지: 질문 입력 → 워크플로우 시작 → 첫 번째 Interrupt
+    2. 두 번째 메시지: 키워드 확인 응답 → 워크플로우 계속 → 두 번째 Interrupt
+    3. 세 번째 메시지: 논문 수 응답 → 워크플로우 계속 → 완료
     
-    Returns:
-        빈 문자열, 업데이트된 히스토리, 업데이트된 상태
+    각 단계에서 다른 로직이 실행됩니다.
     """
     
-    # 빈 메시지 무시
     if not message.strip():
         return "", history, state
     
     # API 키 확인
     has_key, key_or_message = check_api_key()
-    
     if not has_key:
-        # API 키 없으면 사용자 메시지와 에러 메시지 추가
         history.append(ChatMessage(role="user", content=message))
         history.append(ChatMessage(role="assistant", content=key_or_message))
         return "", history, state
     
-    # 세션 ID 설정
+    # 세션 ID 관리
     if "session_id" not in state or state["session_id"] is None:
         state["session_id"] = str(uuid.uuid4())
     
     session_id = state["session_id"]
+    session = get_or_create_session(session_id)
+    assistant = session["assistant"]
     
-    # 먼저 사용자 메시지를 히스토리에 추가
+    # 사용자 메시지를 히스토리에 추가
     history.append(ChatMessage(role="user", content=message))
     
     try:
-        # LangGraph 워크플로우 임포트 (API 키가 있을 때만)
-        from app.graph.workflow import ResearchAssistant
+        current_stage = session.get("current_interrupt_stage", 0)
         
-        # 세션별 어시스턴트 관리
-        if session_id not in session_data:
-            session_data[session_id] = {
-                "assistant": ResearchAssistant(),
-                "waiting": False
-            }
+        if current_stage == 0:
+            # ===================================
+            # 첫 번째 단계: 워크플로우 시작
+            # ===================================
+            logger.info(f"[STAGE 0] 새 질문 시작: {message}")
+            
+            result = assistant.start(message, session_id)
+            
+            if result["status"] == "waiting_for_input":
+                # 첫 번째 Interrupt: 키워드 확인
+                response = result["message"]
+                session["current_interrupt_stage"] = 1
+                logger.info("[STAGE 0 → 1] 첫 번째 Interrupt 도달: 키워드 확인 대기")
+                
+            elif result["status"] == "completed":
+                # 드물게 Interrupt 없이 바로 완료된 경우
+                response = result["response"]
+                session["current_interrupt_stage"] = 0
+                logger.info("[STAGE 0] 경고: Interrupt 없이 완료됨 (드문 경우)")
+                
+            else:
+                response = f"오류가 발생했습니다: {result.get('message', '알 수 없음')}"
+                session["current_interrupt_stage"] = 0
+                logger.error(f"[STAGE 0] 에러: {response}")
         
-        session = session_data[session_id]
-        assistant = session["assistant"]
-        waiting = session.get("waiting", False)
+        elif current_stage == 1:
+            # ===================================
+            # 두 번째 단계: 키워드 확인 응답 처리
+            # ===================================
+            logger.info(f"[STAGE 1] 키워드 확인 응답: {message}")
+            
+            result = assistant.continue_with_response(message)
+            
+            if result["status"] == "waiting_for_input" and result.get("interrupt_stage") == 2:
+                # 두 번째 Interrupt: 논문 수 선택
+                response = result["message"]
+                session["current_interrupt_stage"] = 2
+                logger.info("[STAGE 1 → 2] 두 번째 Interrupt 도달: 논문 수 선택 대기")
+                
+            elif result["status"] == "waiting_for_input" and result.get("interrupt_stage") == 1:
+                # 사용자가 "다시"라고 했으므로 다시 키워드 확인 요청
+                response = result["message"]
+                session["current_interrupt_stage"] = 1
+                logger.info("[STAGE 1] 사용자가 '다시' 선택: 키워드 재확인 요청")
+                
+            elif result["status"] == "completed":
+                response = result["response"]
+                session["current_interrupt_stage"] = 0
+                logger.info("[STAGE 1] 경고: 예상 외로 완료됨")
+                
+            else:
+                response = f"오류: {result.get('message', '알 수 없음')}"
+                session["current_interrupt_stage"] = 0
+                logger.error(f"[STAGE 1] 에러: {response}")
         
-        response = ""  # 응답 초기화
-        
-        if waiting:
-            # Interrupt 응답 처리: 사용자가 논문 수를 입력한 상황
-            logger.info(f"사용자 응답 처리: {message}")
+        elif current_stage == 2:
+            # ===================================
+            # 세 번째 단계: 논문 수 응답 처리
+            # ===================================
+            logger.info(f"[STAGE 2] 논문 수 응답: {message}")
+            
             result = assistant.continue_with_response(message)
             
             if result["status"] == "completed":
                 response = result["response"]
-                session["waiting"] = False
-                logger.info("검색 완료")
+                session["current_interrupt_stage"] = 0
+                logger.info("[STAGE 2 → 완료] 최종 응답 생성 완료")
                 
             elif result["status"] == "waiting_for_input":
+                # 다음 Interrupt가 있으면 (드문 경우)
                 response = result["message"]
-                # waiting 상태 유지
+                session["current_interrupt_stage"] = result.get("interrupt_stage", 0)
+                logger.info(f"[STAGE 2] 다음 Interrupt: stage {session['current_interrupt_stage']}")
                 
             else:
-                response = f"오류: {result.get('message', '알 수 없는 오류')}"
-                session["waiting"] = False
+                response = f"오류: {result.get('message', '알 수 없음')}"
+                session["current_interrupt_stage"] = 0
+                logger.error(f"[STAGE 2] 에러: {response}")
         
         else:
-            # 새 질문 처리
-            logger.info(f"새 질문 처리: {message}")
-            result = assistant.start(message, session_id)
-            
-            if result["status"] == "waiting_for_input":
-                # Interrupt 발생: 사용자에게 논문 수 선택 요청
-                keywords = result.get("keywords", [])
-                response = result["message"]
-                
-                if keywords:
-                    response += f"\n\n추출된 키워드: {', '.join(keywords)}"
-                response += "\n\n검색할 논문 수를 입력해주세요 (1-10):"
-                
-                session["waiting"] = True
-                logger.info("논문 수 선택 대기 중")
-                
-            elif result["status"] == "completed":
-                # 바로 완료된 경우
-                response = result["response"]
-                session["waiting"] = False
-                logger.info("검색 완료")
-                
-            else:
-                response = f"오류: {result.get('message', '알 수 없는 오류')}"
-                session["waiting"] = False
+            # 예상 외의 단계
+            response = f"알 수 없는 단계입니다: {current_stage}"
+            session["current_interrupt_stage"] = 0
+            logger.error(f"[UNKNOWN STAGE] {current_stage}")
         
         # AI 응답을 히스토리에 추가
         history.append(ChatMessage(role="assistant", content=response))
         
     except ImportError as e:
-        # 모듈 임포트 실패
         error_msg = f"모듈 임포트 오류: {str(e)}\nrequirements.txt를 확인해주세요."
         logger.error(f"ImportError: {str(e)}")
         history.append(ChatMessage(role="assistant", content=error_msg))
         
     except Exception as e:
-        # 기타 오류
         error_msg = f"오류가 발생했습니다: {str(e)}"
         logger.error(f"Exception: {str(e)}", exc_info=True)
         history.append(ChatMessage(role="assistant", content=error_msg))
     
-    # 입력 필드 초기화, 히스토리와 상태 반환
     return "", history, state
 
 
 def quick_search(question: str, paper_count: int) -> str:
-    """빠른 검색 - Human-in-the-Loop 없이 바로 실행"""
+    """
+    빠른 검색: Interrupt 없이 자동으로 진행합니다.
+    """
     
     if not question.strip():
         return "질문을 입력해주세요."
@@ -219,10 +251,11 @@ theme = gr.themes.Soft(
     secondary_hue="slate",
 )
 
+
 def create_app():
     """Gradio 앱을 생성합니다."""
     
-    with gr.Blocks(title="AI Research Assistant") as demo:
+    with gr.Blocks(title="AI Research Assistant", theme=theme) as demo:
         # 헤더
         gr.Markdown("""
         # AI Research Assistant
@@ -230,35 +263,46 @@ def create_app():
         
         **기술 스택**: LangGraph + ReAct Pattern + Human-in-the-Loop + arXiv API
         
-        질문을 입력하면 AI가 관련 논문을 검색하고 핵심 내용을 요약해드립니다.
+        질문을 입력하면 AI가 단계별로 당신과 상호작용하며 관련 논문을 검색하고 핵심 내용을 요약해드립니다.
         
         ---
         """)
         
         with gr.Tabs():
             
-            # 탭 1: 대화형 검색
-            with gr.Tab("대화형 검색"):
+            # 탭 1: 대화형 검색 (권장)
+            with gr.Tab("대화형 검색 (권장)"):
                 
                 gr.Markdown("""
                 **Human-in-the-Loop 워크플로우:**
-                1. 연구 질문 입력 → 2. AI 키워드 분석 → 3. **논문 수 선택** → 4. 검색 및 요약
+                
+                1. **첫 번째 대화**: 당신의 연구 질문 입력
+                   - AI가 키워드를 분석하여 추출합니다
+                   
+                2. **두 번째 대화**: 키워드 확인
+                   - "확인"을 입력하면 진행
+                   - "다시"를 입력하면 AI가 다시 분석합니다
+                   
+                3. **세 번째 대화**: 논문 개수 선택 (1-10)
+                   - 검색할 논문의 개수를 선택합니다
+                   
+                4. **최종 결과**: 논문 검색 및 요약
+                   - AI가 논문을 검색하고 종합적인 답변을 제공합니다
                 """)
                 
                 state = gr.State({
-                    "session_id": None,
-                    "waiting": False
+                    "session_id": None
                 })
                 
                 chatbot = gr.Chatbot(
-                    height=450,
+                    height=500,
                     show_label=False,
                     avatar_images=(None, "https://em-content.zobj.net/source/twitter/376/robot_1f916.png")
                 )
                 
                 with gr.Row():
                     msg_input = gr.Textbox(
-                        placeholder="연구 질문을 입력하세요... (예: 자율주행 LiDAR 센서 기술)",
+                        placeholder="당신의 연구 질문을 입력하세요...\n예: 자율주행 자동차의 LiDAR 센서 기술\n또는 이전 단계의 응답을 입력하세요.",
                         lines=2,
                         scale=4,
                         show_label=False
@@ -294,7 +338,7 @@ def create_app():
                 )
                 
                 clear_btn.click(
-                    lambda: ([], {"session_id": None, "waiting": False}),
+                    lambda: ([], {"session_id": None}),
                     outputs=[chatbot, state]
                 )
             
@@ -302,7 +346,9 @@ def create_app():
             with gr.Tab("빠른 검색"):
                 
                 gr.Markdown("""
-                **빠른 검색**: 논문 수를 미리 선택하고 바로 검색을 실행합니다.
+                **빠른 검색**: Interrupt 없이 자동으로 모든 단계를 진행합니다.
+                
+                미리 논문 개수를 선택하고 질문을 입력하면, AI가 자동으로 검색하고 답변을 생성합니다.
                 """)
                 
                 with gr.Row():
@@ -319,7 +365,7 @@ def create_app():
                             maximum=10,
                             value=3,
                             step=1,
-                            label="논문 수"
+                            label="논문 개수"
                         )
                         search_btn = gr.Button("검색", variant="primary", size="lg")
                 
@@ -331,38 +377,52 @@ def create_app():
                     outputs=quick_output
                 )
             
-            # 탭 3: 시스템 정보
+            # 탭 3: 정보
             with gr.Tab("정보"):
                 
-                # API 키 상태 확인
                 has_key, _ = check_api_key()
-                status_emoji = "설정됨" if has_key else "설정 필요"
+                status_text = "설정됨" if has_key else "설정 필요"
                 
                 gr.Markdown(f"""
                 ## 시스템 정보
                 
                 ### API 상태
-                - **OpenAI API Key**: {status_emoji}
+                - **OpenAI API Key**: {status_text}
                 
-                ### 주요 기능
+                ### 두 단계 Human-in-the-Loop 구조
                 
-                - 질문 분석: AI가 질문을 분석하여 핵심 키워드 추출
-                - Human-in-the-Loop: 사용자가 검색 설정을 확인/조정
-                - 논문 검색: arXiv에서 관련 논문 검색
-                - 연관성 평가: 검색 결과 품질 필터링
-                - 요약 생성: 구조화된 논문 요약
+                이 시스템은 AI와 사용자가 상호작용하는 두 가지 주요 단계를 가집니다:
+                
+                **첫 번째 단계: 키워드 확인**
+                - AI가 당신의 질문을 분석하여 핵심 키워드를 추출합니다
+                - 당신은 추출된 키워드가 정확한지 확인합니다
+                - "확인"을 입력하면 진행, "다시"를 입력하면 재분석합니다
+                
+                **두 번째 단계: 논문 개수 선택**
+                - 검색할 논문의 개수를 선택합니다 (1-10)
+                - AI가 선택한 개수의 논문을 검색합니다
+                
+                **최종 단계: 응답 생성**
+                - AI가 검색된 논문들을 분석하여 종합적인 답변을 제공합니다
                 
                 ### 기술 스택
                 
-                - **LangGraph**: 워크플로우 오케스트레이션
+                - **LangGraph**: AI 워크플로우 오케스트레이션
                 - **ReAct 패턴**: Thought-Action-Observation 구조
-                - **OpenAI GPT-4o**: 질문 분석 및 요약
-                - **arXiv API**: 논문 검색
+                - **OpenAI GPT-4o**: 질문 분석 및 응답 생성
+                - **arXiv API**: 학술 논문 검색
                 - **Gradio**: 웹 인터페이스
+                
+                ### 주요 특징
+                
+                - **Human-in-the-Loop**: 사용자가 중간에 개입하여 정확성을 높입니다
+                - **ReAct 패턴**: AI의 사고 과정을 투명하게 보여줍니다
+                - **상태 관리**: 대화 상태를 정확하게 추적합니다
+                - **조건부 라우팅**: 사용자의 응답에 따라 동적으로 워크플로우가 진행됩니다
                 
                 ---
                 
-                **버전**: 2.0 | **개발**: AI Hackathon Project
+                **버전**: 2.1 | **개발**: AI Hackathon Project
                 """)
         
         # 푸터
@@ -383,6 +443,5 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=False,
-        theme=theme
+        share=False
     )
