@@ -131,26 +131,35 @@ def quick_search(question: str, paper_count: int) -> str:
 # ============================================
 
 def create_gradio_interface() -> gr.Blocks:
-    """
-    Gradio 웹 인터페이스를 생성합니다.
-    """
-    
     theme = gr.themes.Soft(
         primary_hue="blue",
         secondary_hue="gray",
     )
     
     with gr.Blocks(
-        title="📚 AI Research Assistant",
-        theme=theme,
-        css="""
+        title="📚 AI Research Assistant",  # ✅ title만 유지
+    ) as demo:
+        # 기존 컴포넌트들 그대로 (Chatbot bubble_full_width는 Gradio 6에서 제거됨, 하지만 코드에 있으므로 수정 필요)
+        ...
+    
+    return demo
+
+def main():
+    demo = create_gradio_interface()
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False,
+        theme=theme,  # ✅ 여기로 이동
+        css="""  # ✅ 여기로 이동
         .container { max-width: 1200px; margin: auto; }
         .header { text-align: center; margin-bottom: 20px; }
         """
-    ) as demo:
+    )
+
         
         # 헤더
-        gr.Markdown("""
+    gr.Markdown("""
         # 📚 AI Research Assistant
         ### 학술 논문 기반 지능형 연구 도우미
         
@@ -162,7 +171,7 @@ def create_gradio_interface() -> gr.Blocks:
         """)
         
         # 탭 인터페이스
-        with gr.Tabs():
+    with gr.Tabs():
             
             # 탭 1: 대화형 검색
             with gr.Tab("💬 대화형 검색", id="chat"):
@@ -185,8 +194,10 @@ def create_gradio_interface() -> gr.Blocks:
                     label="대화",
                     height=500,
                     show_label=False,
-                    bubble_full_width=False
-                )
+                    # bubble_full_width=False  # ❌ Gradio 6.x에서 완전 제거됨
+                    # buttons=["copy", "copy_all", "share"]  # 필요 시 추가 (show_copy_button 등 대체)
+                    )
+
                 
                 with gr.Row():
                     chat_input = gr.Textbox(
@@ -324,7 +335,7 @@ def create_gradio_interface() -> gr.Blocks:
                 """)
         
         # 푸터
-        gr.Markdown("""
+    gr.Markdown("""
         ---
         <center>
         Made with ❤️ using LangGraph + Gradio | 

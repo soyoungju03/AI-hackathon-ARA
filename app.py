@@ -9,6 +9,8 @@
 3. 세 번째 대화: 논문 수 선택 → 최종 응답 생성
 
 세션 기반 상태 관리로 사용자의 대화 흐름을 완벽하게 추적합니다.
+
+수정 사항: Gradio 6.3.0 호환성 - ChatMessage를 dict로 변경
 """
 
 import os
@@ -18,7 +20,6 @@ import logging
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gradio as gr
-from gradio import ChatMessage 
 from typing import Tuple
 import uuid
 
@@ -52,6 +53,20 @@ Hugging Face Spaces 사용자:
         """
     
     return True, api_key
+
+
+# ============================================
+# 메시지 헬퍼 (Gradio 6.3.0 호환)
+# ============================================
+
+def create_user_message(content: str) -> dict:
+    """Gradio 6.3.0 호환 사용자 메시지 생성"""
+    return {"role": "user", "content": content}
+
+
+def create_assistant_message(content: str) -> dict:
+    """Gradio 6.3.0 호환 어시스턴트 메시지 생성"""
+    return {"role": "assistant", "content": content}
 
 
 # ============================================
@@ -99,8 +114,9 @@ def process_chat_message(
     # API 키 확인
     has_key, key_or_message = check_api_key()
     if not has_key:
-        history.append(ChatMessage(role="user", content=message))
-        history.append(ChatMessage(role="assistant", content=key_or_message))
+        # Gradio 6.3.0: ChatMessage 대신 dict 사용
+        history.append(create_user_message(message))
+        history.append(create_assistant_message(key_or_message))
         return "", history, state
     
     # 세션 ID 관리
@@ -111,8 +127,8 @@ def process_chat_message(
     session = get_or_create_session(session_id)
     assistant = session["assistant"]
     
-    # 사용자 메시지를 히스토리에 추가
-    history.append(ChatMessage(role="user", content=message))
+    # 사용자 메시지를 히스토리에 추가 (Gradio 6.3.0: dict 사용)
+    history.append(create_user_message(message))
     
     try:
         current_stage = session.get("current_interrupt_stage", 0)
@@ -202,18 +218,18 @@ def process_chat_message(
             session["current_interrupt_stage"] = 0
             logger.error(f"[UNKNOWN STAGE] {current_stage}")
         
-        # AI 응답을 히스토리에 추가
-        history.append(ChatMessage(role="assistant", content=response))
+        # AI 응답을 히스토리에 추가 (Gradio 6.3.0: dict 사용)
+        history.append(create_assistant_message(response))
         
     except ImportError as e:
         error_msg = f"모듈 임포트 오류: {str(e)}\nrequirements.txt를 확인해주세요."
         logger.error(f"ImportError: {str(e)}")
-        history.append(ChatMessage(role="assistant", content=error_msg))
+        history.append(create_assistant_message(error_msg))
         
     except Exception as e:
         error_msg = f"오류가 발생했습니다: {str(e)}"
         logger.error(f"Exception: {str(e)}", exc_info=True)
-        history.append(ChatMessage(role="assistant", content=error_msg))
+        history.append(create_assistant_message(error_msg))
     
     return "", history, state
 
@@ -294,7 +310,9 @@ def create_app():
                     "session_id": None
                 })
                 
+                # Gradio 6.3.0: type="messages" 사용
                 chatbot = gr.Chatbot(
+                    type="messages",
                     height=500,
                     show_label=False,
                     avatar_images=(None, "https://em-content.zobj.net/source/twitter/376/robot_1f916.png")
@@ -411,7 +429,7 @@ def create_app():
                 - **ReAct 패턴**: Thought-Action-Observation 구조
                 - **OpenAI GPT-4o**: 질문 분석 및 응답 생성
                 - **arXiv API**: 학술 논문 검색
-                - **Gradio**: 웹 인터페이스
+                - **Gradio 6.3.0**: 웹 인터페이스
                 
                 ### 주요 특징
                 
@@ -422,13 +440,13 @@ def create_app():
                 
                 ---
                 
-                **버전**: 2.1 | **개발**: AI Hackathon Project
+                **버전**: 2.2 (Gradio 6.3.0 호환) | **개발**: AI Hackathon Project
                 """)
         
         # 푸터
         gr.Markdown("""
         ---
-        Made with LangGraph + Gradio
+        Made with LangGraph + Gradio 6.3.0
         """)
     
     return demo
@@ -439,9 +457,24 @@ def create_app():
 # ============================================
 
 if __name__ == "__main__":
-    demo = create_app()
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=True  # False를 True로 변경
+    # 로깅 설정
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    
+    logger.info("="*60)
+    logger.info("ARA (AI Research Assistant) 애플리케이션 시작")
+    logger.info("Gradio 버전: 6.3.0 호환")
+    logger.info("="*60)
+    
+    try:
+        demo = create_app()
+        demo.launch(
+            server_name="0.0.0.0",
+            server_port=7860,
+            share=True
+        )
+    except Exception as e:
+        logger.error(f"앱 시작 실패: {str(e)}", exc_info=True)
+        raise
