@@ -97,9 +97,19 @@ class ArxivSearchTool:
                     clean_keyword = f'"{clean_keyword}"'
                 keyword_queries.append(f"(ti:{clean_keyword} OR abs:{clean_keyword})")
         
-        # AND로 연결
+        # AND로 연결-->OR 연결로 수정(구체적인 조건 설정 시 논문 찾기 까다로움)
         query = " AND ".join(keyword_queries)
         
+        # 처음 2-3개 키워드는 AND로, 나머지는 OR로 연결하여 더 유연한 검색 수행
+        if len(keyword_queries) <= 2:
+            # 키워드가 2개 이하면 AND로 연결
+            query = " AND ".join(keyword_queries)
+        else:
+            # 키워드가 3개 이상이면 처음 2개는 AND, 나머지는 OR로 연결
+            main_keywords = " AND ".join(keyword_queries[:2])
+            optional_keywords = " OR ".join(keyword_queries[2:])
+            query = f"({main_keywords}) OR ({optional_keywords})"
+
         # 도메인/카테고리 필터 추가
         if domain:
             category_map = {
