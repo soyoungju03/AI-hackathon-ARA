@@ -1,36 +1,99 @@
 # -*- coding: utf-8 -*-
 """
-수정된 LangGraph 노드들 (두 단계 Human-in-the-Loop 버전)
+수정된 LangGraph 노드들 (PDF 임베딩 파이프라인 완전 통합)
 
-주요 변경 사항:
-1. request_user_confirmation_node를 두 개로 분리
-   - request_keyword_confirmation_node: 첫 번째 Interrupt (키워드 확인)
-   - request_paper_count_node: 두 번째 Interrupt (논문 수 선택)
+주요 기능:
+1. 두 단계 Human-in-the-Loop (키워드 확인 + 논문 수 선택)
+2. arXiv 검색 + PDF 임베딩 파이프라인 통합
+3. ChromaDB를 사용한 의미 기반 검색
+4. ReAct 패턴을 따른 투명한 AI 사고 과정
 
-2. process_user_response_node를 두 개로 분리
-   - process_keyword_confirmation_response: 키워드 확인 응답 처리
-   - process_paper_count_response: 논문 수 응답 처리
-
-3. 각 노드가 하나의 명확한 목적을 가짐 (단일 책임 원칙)
+데이터 흐름:
+사용자 질문 → 분석 → 키워드 확인 → 논문 수 선택 →
+arXiv 검색 → PDF 다운로드 → 텍스트 추출 → 청킹 → 임베딩 →
+ChromaDB 저장 → 의미 기반 검색 → 요약 및 답변
 """
 
 import logging
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
-from app.tools.vectorstore import WorkflowIntegration
 
 from app.graph.state import (
     AgentState, 
-    Paper, 
     ReActStep, 
-    InterruptData,
-    add_react_step
+    InterruptData
 )
 from app.tools.paper_search.arxiv_tool import search_arxiv
 from app.config import get_settings
+from app.tools.pdf_embedding_pipeline_final import PDFEmbeddingPipeline
+from app.tools.embeddings import SentenceTransformerEmbedding
+from app.tools.vectorstore import ArxivPaperVectorStore
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# PDF 임베딩 파이프라인 초기화 (싱글톤)
+# ============================================
+
+_pdf_pipeline = None
+
+def get_pdf_pipeline():
+    """
+    PDF 처리 파이프라인을 초기화합니다.
+    
+    싱글톤 패턴을 사용하므로 첫 번째 호출 시에만 초기화되고,
+    이후 호출에서는 이미 초기화된 인스턴스를 반환합니다.
+    
+    임베딩 모델과 벡터 스토어는 메모리에 상주하므로,
+    여러 요청에서 재사용할 수 있어 효율적입니다.
+    """
+    
+    global _pdf_pipeline
+    
+    if _pdf_pipeline is None:
+        try:
+            logger.info("[INIT] PDF 임베딩 파이프라인 초기화 중...")
+            
+            # Step 1: 임베딩 모델 초기화
+            # distiluse-base-multilingual-cased-v2는 한국어를 포함한 여러 언어를 지원합니다
+            # 모델 크기는 약 100MB이고, 처음 로드 시 Hugging Face에서 다운로드됩니다
+            embedding_model = SentenceTransformerEmbedding(
+                model_name="distiluse-base-multilingual-cased-v2"
+            )
+            
+            # Step 2: ChromaDB 벡터 스토어 초기화
+            # 이것은 당신의 vectorstore.py에 정의된 ArxivPaperVectorStore입니다
+            vectorstore = ArxivPaperVectorStore(
+                persist_directory="./data/arxiv_chunks",
+                collection_name="arxiv_chunks"
+            )
+            
+            # Step 3: PDF 처리 파이프라인 생성
+            # 이 파이프라인은 PDF 다운로드부터 임베딩까지 모든 과정을 관리합니다
+            _pdf_pipeline = PDFEmbeddingPipeline(
+                embedding_model=embedding_model,
+                vectorstore=vectorstore,
+                chunk_chars=1800,      # 각 청크의 대략적인 문자 수 (약 450 토큰)
+                overlap_chars=350,     # 청크 간 오버래프 (문맥 손실 방지)
+                batch_size=32          # 한 번에 임베딩할 청크 수
+            )
+            
+            logger.info("✓ PDF 임베딩 파이프라인 초기화 완료")
+            logger.info(f"  - 임베딩 모델: distiluse-base-multilingual-cased-v2")
+            logger.info(f"  - 벡터 저장소: ChromaDB")
+            logger.info(f"  - 청크 크기: 1800 문자 (~450 토큰)")
+        
+        except ImportError as e:
+            logger.error(f"PDF 파이프라인 모듈 임포트 실패: {str(e)}")
+            logger.error("pdf_embedding_pipeline_final.py가 app/tools/ 디렉토리에 있는지 확인하세요")
+            raise
+        except Exception as e:
+            logger.error(f"PDF 파이프라인 초기화 실패: {str(e)}")
+            raise
+    
+    return _pdf_pipeline
 
 
 def get_llm(model: str = None):
@@ -43,12 +106,22 @@ def get_llm(model: str = None):
 
 
 # ============================================
-# 노드 1: 질문 수신 (receive_question)
+# 노드 1: 질문 수신 (receive_question_node)
 # ============================================
 
 def receive_question_node(state: AgentState) -> dict:
-    """사용자 질문을 수신합니다."""
-    user_question = state["user_question"]
+    """
+    사용자의 질문을 수신하고 처리를 시작합니다.
+    
+    이것은 워크플로우의 첫 번째 노드로, 단순히 질문을 확인하고
+    다음 단계인 질문 분석을 준비합니다.
+    """
+    user_question = state.get("user_question", "")
+    
+    logger.info("="*60)
+    logger.info("[RECEIVE_QUESTION] 사용자 질문 수신")
+    logger.info("="*60)
+    logger.info(f"질문: {user_question}")
     
     thought_content = f'사용자 질문을 수신했습니다: "{user_question}"\n이제 질문을 분석하여 핵심 키워드와 의도를 파악해야 합니다.'
     
@@ -63,7 +136,7 @@ def receive_question_node(state: AgentState) -> dict:
 
 
 # ============================================
-# 노드 2: 질문 분석 (analyze_question)
+# 노드 2: 질문 분석 (analyze_question_node)
 # ============================================
 
 QUESTION_ANALYSIS_PROMPT = """
@@ -93,24 +166,34 @@ DOMAIN: 연구 도메인
 
 
 def analyze_question_node(state: AgentState) -> dict:
-    """사용자 질문을 분석하여 키워드를 추출합니다."""
-    user_question = state["user_question"]
+    """
+    사용자 질문을 분석하여 핵심 키워드를 추출합니다.
     
-    logger.info(f"질문 분석 시작: {user_question}")
+    이 노드는 LLM을 사용하여 사용자의 자연어 질문을 파싱하고,
+    arXiv 검색에 사용할 수 있는 구조화된 정보로 변환합니다.
+    """
+    
+    user_question = state.get("user_question", "")
+    
+    logger.info("="*60)
+    logger.info("[ANALYZE_QUESTION] 질문 분석 시작")
+    logger.info("="*60)
+    logger.info(f"분석 대상: {user_question[:50]}...")
     
     try:
         llm = get_llm(settings.light_model)
         prompt = QUESTION_ANALYSIS_PROMPT.format(question=user_question)
         
-        logger.info("LLM에 요청 전송 중...")
+        logger.info("LLM에 질문 분석 요청 전송...")
         
         response = llm.invoke([
             SystemMessage(content="당신은 학술 연구 질문 분석 전문가입니다."),
             HumanMessage(content=prompt)
         ])
         
-        logger.info(f"LLM 응답 수신")
+        logger.info("✓ LLM 응답 수신")
         
+        # LLM 응답 파싱
         response_text = response.content
         keywords = []
         intent = ""
@@ -126,7 +209,10 @@ def analyze_question_node(state: AgentState) -> dict:
             elif line.startswith("DOMAIN:"):
                 domain = line.replace("DOMAIN:", "").strip()
         
-        logger.info(f"추출된 키워드: {keywords}")
+        logger.info(f"✓ 분석 완료")
+        logger.info(f"  추출된 키워드: {keywords}")
+        logger.info(f"  질문 의도: {intent}")
+        logger.info(f"  연구 도메인: {domain}")
         
         observation_content = f"질문 분석 완료:\n- 추출된 키워드: {keywords}\n- 질문 의도: {intent}\n- 연구 도메인: {domain}"
         
@@ -143,19 +229,19 @@ def analyze_question_node(state: AgentState) -> dict:
         }
         
     except Exception as e:
-        logger.error(f"질문 분석 중 오류: {str(e)}")
+        logger.error(f"질문 분석 중 오류: {str(e)}", exc_info=True)
         return {
-            "extracted_keywords": [],
-            "question_intent": "",
-            "question_domain": "",
+            "extracted_keywords": ["research"],  # 기본 키워드
+            "question_intent": "general research",
+            "question_domain": "computer science",
             "error_message": str(e),
-            "react_steps": [ReActStep(step_type="observation", content=f"분석 실패: {str(e)}")]
+            "react_steps": [ReActStep(step_type="observation", content=f"분석 실패, 기본값 사용: {str(e)}")]
         }
 
 
 # ============================================
-# 노드 3: 키워드 확인 요청 (request_keyword_confirmation)
-# 첫 번째 Interrupt 지점
+# 노드 3: 키워드 확인 요청 (request_keyword_confirmation_node)
+# 첫 번째 Human-in-the-Loop Interrupt 지점
 # ============================================
 
 def request_keyword_confirmation_node(state: AgentState) -> dict:
@@ -163,9 +249,12 @@ def request_keyword_confirmation_node(state: AgentState) -> dict:
     추출된 키워드가 맞는지 사용자에게 확인받습니다.
     
     첫 번째 Human-in-the-Loop Interrupt 지점입니다.
-    사용자가 "확인" 또는 "다시"라고 응답할 때까지 대기합니다.
+    워크플로우는 여기서 멈추고 사용자가 응답할 때까지 대기합니다.
     """
+    
     keywords = state.get("extracted_keywords", [])
+    
+    logger.info("[REQUEST_KEYWORD_CONFIRMATION] 사용자 확인 대기 시작")
     
     message = f"""
 추출된 키워드를 확인해주세요.
@@ -210,13 +299,19 @@ def process_keyword_confirmation_response_node(state: AgentState) -> dict:
     """
     사용자의 키워드 확인 응답을 처리합니다.
     
-    사용자가 "확인"이라고 하면 논문 수 선택 단계로 진행합니다.
-    사용자가 "다시"라고 하면 분석 단계로 돌아갑니다.
+    - "다시" → 질문 분석 단계로 돌아감
+    - 그 외 ("확인" 등) → 논문 수 선택 단계로 진행
     """
+    
     user_response = state.get("user_response", "").strip().lower()
     
-    # 응답이 "다시" 또는 재분석을 의미하면, 분석 단계로 돌아가야 함
-    if user_response in ["다시", "retry", "다시하기", "수정"]:
+    logger.info("[PROCESS_KEYWORD_CONFIRMATION] 사용자 응답 처리")
+    logger.info(f"  응답: {user_response}")
+    
+    # "다시" 응답 확인
+    if user_response in ["다시", "retry", "다시하기", "수정", "다시해", "reanalyze"]:
+        logger.info("  → '다시' 선택: 질문 분석 단계로 이동")
+        
         observation_content = "사용자가 키워드 재분석을 요청했습니다. 질문 분석 단계로 돌아갑니다."
         
         new_step = ReActStep(
@@ -234,6 +329,8 @@ def process_keyword_confirmation_response_node(state: AgentState) -> dict:
         }
     
     # 그 외의 경우 "확인"으로 처리
+    logger.info("  → '확인' 선택: 논문 수 선택 단계로 이동")
+    
     observation_content = f"사용자가 키워드를 확인했습니다. 키워드: {', '.join(state.get('extracted_keywords', []))}"
     
     new_step = ReActStep(
@@ -246,15 +343,15 @@ def process_keyword_confirmation_response_node(state: AgentState) -> dict:
         "waiting_for": None,
         "waiting_for_user": False,
         "interrupt_data": None,
-        "interrupt_stage": 1,  # 1단계 완료
+        "interrupt_stage": 1,
         "react_steps": [new_step],
         "user_response": None
     }
 
 
 # ============================================
-# 노드 5: 논문 수 선택 요청 (request_paper_count)
-# 두 번째 Interrupt 지점
+# 노드 5: 논문 수 선택 요청 (request_paper_count_node)
+# 두 번째 Human-in-the-Loop Interrupt 지점
 # ============================================
 
 def request_paper_count_node(state: AgentState) -> dict:
@@ -262,13 +359,18 @@ def request_paper_count_node(state: AgentState) -> dict:
     몇 개의 논문을 검색할지 사용자에게 선택받습니다.
     
     두 번째 Human-in-the-Loop Interrupt 지점입니다.
-    사용자가 1-10 중 하나를 선택할 때까지 대기합니다.
+    워크플로우는 여기서 멈추고 사용자의 선택을 기다립니다.
     """
+    
+    logger.info("[REQUEST_PAPER_COUNT] 사용자 선택 대기 시작")
+    
     message = """
 검색할 논문의 개수를 선택해주세요.
 
 1부터 10 사이의 숫자를 입력해주세요.
 (기본값: 3개)
+
+더 많은 논문을 선택할수록 처리 시간이 길어집니다.
     """.strip()
     
     interrupt_data = InterruptData(
@@ -304,13 +406,23 @@ def request_paper_count_node(state: AgentState) -> dict:
 def process_paper_count_response_node(state: AgentState) -> dict:
     """
     사용자가 선택한 논문 수를 처리합니다.
+    
+    입력값을 정수로 파싱하고, 1-10 범위로 제한합니다.
+    잘못된 입력의 경우 기본값 3을 사용합니다.
     """
+    
     user_response = state.get("user_response", "3")
+    
+    logger.info("[PROCESS_PAPER_COUNT] 사용자 응답 처리")
+    logger.info(f"  응답: {user_response}")
     
     try:
         paper_count = int(user_response)
-        paper_count = max(1, min(10, paper_count))  # 1-10 범위로 제한
+        # 유효한 범위로 제한
+        paper_count = max(1, min(10, paper_count))
+        logger.info(f"  → 해석됨: {paper_count}개")
     except ValueError:
+        logger.warning(f"  → 유효하지 않은 입력, 기본값 3 사용")
         paper_count = 3
     
     observation_content = f"사용자가 논문 수를 선택했습니다: {paper_count}개"
@@ -325,23 +437,57 @@ def process_paper_count_response_node(state: AgentState) -> dict:
         "waiting_for": None,
         "waiting_for_user": False,
         "interrupt_data": None,
-        "interrupt_stage": 2,  # 2단계 완료
+        "interrupt_stage": 2,
         "react_steps": [new_step],
         "user_response": None
     }
 
 
 # ============================================
-# 노드 7: 논문 검색 (search_papers)
+# 노드 7: 논문 검색 + PDF 처리 (search_papers_node)
 # ============================================
 
 def search_papers_node(state: AgentState) -> dict:
-    """설정된 키워드와 옵션으로 논문을 검색합니다."""
+    """
+    arXiv에서 논문을 검색한 후 PDF 임베딩 파이프라인을 실행합니다.
+    
+    이 노드가 당신의 시스템에서 가장 복잡하고 시간이 많이 걸리는 부분입니다.
+    
+    실행 단계:
+    1. arXiv API를 사용하여 논문 검색
+    2. 각 논문의 PDF를 다운로드
+    3. PDF에서 텍스트 추출
+    4. 텍스트를 청크로 분할 (약 450 토큰씩)
+    5. 각 청크를 Sentence Transformers로 임베딩
+    6. 임베딩된 청크를 ChromaDB에 저장
+    
+    이러한 저장된 청크들은 나중에 evaluate_relevance_node에서
+    사용자의 질문과 의미론적으로 유사한 부분을 찾는 데 사용됩니다.
+    """
+    
     keywords = state.get("extracted_keywords", [])
     paper_count = state.get("paper_count", 3)
     domain = state.get("question_domain", None)
     
-    action_content = f"논문 검색을 실행합니다:\n- 키워드: {keywords}\n- 검색 수: {paper_count}\n- 도메인: {domain or '전체'}\n- 소스: arXiv"
+    logger.info("="*60)
+    logger.info("[SEARCH_PAPERS] 논문 검색 + PDF 처리 시작")
+    logger.info("="*60)
+    logger.info(f"키워드: {keywords}")
+    logger.info(f"검색 개수: {paper_count}개")
+    logger.info(f"도메인: {domain or '전체'}")
+    
+    action_content = f"""논문 검색 및 PDF 처리 파이프라인 시작:
+- 키워드: {', '.join(keywords)}
+- 검색 개수: {paper_count}개
+- 도메인: {domain or '전체'}
+
+처리 단계:
+1) arXiv에서 논문 검색
+2) 각 논문의 PDF 다운로드
+3) PDF에서 텍스트 추출
+4) 텍스트를 청크로 분할
+5) 각 청크를 임베딩
+6) ChromaDB에 저장"""
     
     action_step = ReActStep(
         step_type="action",
@@ -349,15 +495,95 @@ def search_papers_node(state: AgentState) -> dict:
     )
     
     try:
+        # Step 1: arXiv에서 논문 검색
+        logger.info("\nStep 1: arXiv 검색 실행...")
+        
         papers = search_arxiv(
             keywords=keywords,
             max_results=paper_count,
             domain=domain
         )
         
-        observation_content = f"검색 완료: {len(papers)}개의 논문을 찾았습니다."
-        for i, paper in enumerate(papers, 1):
-            observation_content += f"\n{i}. {paper.title[:50]}... (연관성: {paper.relevance_score})"
+        if not papers:
+            logger.warning("검색 결과 없음")
+            observation_step = ReActStep(
+                step_type="observation",
+                content="arXiv에서 관련 논문을 찾지 못했습니다. 다른 키워드로 시도해주세요."
+            )
+            
+            return {
+                "papers": [],
+                "chunks_saved": 0,
+                "react_steps": [action_step, observation_step],
+                "error_message": "검색 결과 없음"
+            }
+        
+        logger.info(f"✓ {len(papers)}개 논문 검색 완료")
+        
+        # Step 2: PDF 처리 파이프라인 초기화
+        logger.info("\nStep 2: PDF 처리 파이프라인 초기화...")
+        
+        pipeline = get_pdf_pipeline()
+        
+        logger.info(f"✓ 파이프라인 준비 완료")
+        
+        # Step 3: 논문을 파이프라인 형식으로 변환
+        logger.info("\nStep 3: 논문 데이터 변환...")
+        
+        papers_for_pipeline = []
+        for paper in papers:
+            # paper 객체의 속성을 딕셔너리로 변환
+            arxiv_id = paper.url.split('/')[-1] if hasattr(paper, 'url') and paper.url else 'unknown'
+            
+            paper_dict = {
+                'arxiv_id': arxiv_id,
+                'title': getattr(paper, 'title', ''),
+                'abstract': getattr(paper, 'abstract', ''),
+                'authors': getattr(paper, 'authors', []),
+                'published_date': getattr(paper, 'published_date', ''),
+                'categories': getattr(paper, 'categories', []),
+                'url': getattr(paper, 'url', ''),
+            }
+            papers_for_pipeline.append(paper_dict)
+        
+        logger.info(f"✓ {len(papers_for_pipeline)}개 논문 변환 완료")
+        
+        # Step 4: PDF 처리 파이프라인 실행 (배치 모드)
+        logger.info("\nStep 4: PDF 처리 파이프라인 실행 중...")
+        logger.info("  (이 단계는 시간이 걸릴 수 있습니다)")
+        
+        batch_result = pipeline.process_papers_batch(
+            papers=papers_for_pipeline,
+            max_pages=10  # 각 논문에서 최대 10페이지만 처리
+        )
+        
+        logger.info(f"✓ PDF 처리 완료")
+        
+        # 처리 결과 분석
+        total_chunks_created = sum(r.get('chunks_created', 0) for r in batch_result['results'])
+        total_chunks_saved = batch_result['total_chunks']
+        
+        logger.info(f"\n처리 결과 통계:")
+        logger.info(f"  - 처리된 논문: {batch_result['successful']}/{len(papers)}")
+        logger.info(f"  - 생성된 청크: {total_chunks_created}개")
+        logger.info(f"  - 저장된 청크: {total_chunks_saved}개")
+        logger.info(f"  - 처리 시간: {batch_result['time']:.1f}초")
+        
+        # 처리 결과 요약
+        observation_content = f"""검색 및 PDF 처리 완료:
+
+검색 결과:
+- 검색된 논문: {len(papers)}개
+- 처리 성공: {batch_result['successful']}개
+- 처리 실패: {batch_result['failed']}개
+
+청크 처리 통계:
+- 생성된 청크: {total_chunks_created}개
+- 저장된 청크: {total_chunks_saved}개
+- 처리 시간: {batch_result['time']:.1f}초
+
+다음 단계에서 사용자의 질문과 의미론적으로 
+가장 유사한 청크들을 검색합니다."""
         
         observation_step = ReActStep(
             step_type="observation",
@@ -366,310 +592,207 @@ def search_papers_node(state: AgentState) -> dict:
         
         return {
             "papers": papers,
+            "chunks_saved": total_chunks_saved,
+            "pdf_processing_result": batch_result,
             "react_steps": [action_step, observation_step],
             "error_message": None
         }
-        
+    
     except Exception as e:
-        logger.error(f"논문 검색 중 오류: {str(e)}")
-        error_step = ReActStep(
+        logger.error(f"처리 중 오류: {str(e)}", exc_info=True)
+        
+        error_observation = ReActStep(
             step_type="observation",
-            content=f"검색 중 오류 발생: {str(e)}"
+            content=f"""처리 중 오류 발생:
+{str(e)}
+
+다음을 확인해주세요:
+1. 인터넷 연결 상태
+2. arXiv 서버 상태
+3. 디스크 공간
+4. 메모리 용량"""
         )
         
         return {
             "papers": [],
-            "react_steps": [action_step, error_step],
+            "chunks_saved": 0,
+            "react_steps": [action_step, error_observation],
             "error_message": str(e)
         }
 
 
 # ============================================
-# 노드 8: 연관성 평가 (evaluate_relevance)
+# 노드 8: 의미 기반 관련성 평가 (evaluate_relevance_node)
 # ============================================
-# nodes.py의 evaluate_relevance_node 함수 수정
 
-"""
-app/graph/nodes.py에서 evaluate_relevance_node를 수정하는 방법
-
-이것은 당신의 기존 코드에 VectorStore 통합을 추가하는 방법을 보여줍니다.
-"""
-
-# nodes.py의 임포트 부분에 추가
-from app.tools.vectorstore_integrated import WorkflowIntegration
-import logging
-
-logger = logging.getLogger(__name__)
-
-# 전역 변수로 WorkflowIntegration 인스턴스 생성 (싱글톤 패턴)
-_workflow_integration = None
-
-def get_workflow_integration() -> 'WorkflowIntegration':
+def evaluate_relevance_node(state: AgentState) -> dict:
     """
-    WorkflowIntegration 인스턴스를 가져옵니다.
-    싱글톤 패턴을 사용하여 앱 전체에서 하나의 인스턴스만 사용합니다.
+    ChromaDB에 저장된 청크들 중에서 사용자의 질문과
+    의미론적으로 가장 유사한 청크들을 검색합니다.
+    
+    이 노드의 핵심은 코사인 유사도 계산입니다.
+    사용자의 질문을 벡터로 변환한 후, 저장된 모든 청크 벡터와 비교합니다.
+    가장 높은 유사도를 가진 청크들이 반환됩니다.
+    
+    이러한 청크 기반 검색은 논문 초록만 보는 것보다 훨씬 정밀합니다.
     """
-    global _workflow_integration
-    if _workflow_integration is None:
-        _workflow_integration = WorkflowIntegration(
-            persist_directory="./data/arxiv_vectorstore"
+    
+    user_question = state.get("user_question", "")
+    paper_count = state.get("paper_count", 3)
+    chunks_saved = state.get("chunks_saved", 0)
+    
+    logger.info("="*60)
+    logger.info("[EVALUATE_RELEVANCE] 의미 기반 검색 시작")
+    logger.info("="*60)
+    logger.info(f"질문: {user_question[:50]}...")
+    logger.info(f"검색할 청크 수: {paper_count * 3}개")
+    logger.info(f"사용 가능한 청크: {chunks_saved}개")
+    
+    action_content = f"""의미 기반 청크 검색:
+- 질문: "{user_question[:60]}..."
+- 검색 방식: 코사인 유사도 (Sentence Transformers)
+- 목표 청크 수: {paper_count * 3}개
+- 사용 가능한 청크: {chunks_saved}개"""
+    
+    action_step = ReActStep(
+        step_type="action",
+        content=action_content
+    )
+    
+    if chunks_saved == 0:
+        logger.warning("저장된 청크가 없음")
+        observation_step = ReActStep(
+            step_type="observation",
+            content="""의미 기반 검색 실패:
+이전 단계에서 청크가 저장되지 않았습니다.
+검색이 실패했거나 모든 PDF 처리가 실패했을 가능성이 있습니다."""
         )
-    return _workflow_integration
-
-
-# ===================================================================
-# 수정된 evaluate_relevance_node 예시
-# ===================================================================
-
-def evaluate_relevance_node(state: 'AgentState') -> dict:
-    """
-    의미 기반 관련성 평가 노드
-    
-    당신의 embeddings.py와 VectorStore를 사용하여
-    검색된 논문들을 의미론적으로 평가합니다.
-    
-    Args:
-        state: AgentState 객체, 다음 필드를 포함해야 함:
-            - searched_papers: arXiv API에서 검색한 논문 리스트
-            - original_question: 사용자의 원래 질문
-            - paper_count: 사용자가 선택한 논문 개수
-    
-    Returns:
-        상태 업데이트 딕셔너리:
-            - relevant_papers: 의미 기반으로 선별된 논문 리스트
-            - evaluation_result: 평가 결과 상세정보
-    """
-    
-    logger.info("="*60)
-    logger.info("[EVALUATE_RELEVANCE_NODE] 의미 기반 평가 시작")
-    logger.info("="*60)
+        
+        return {
+            "relevant_chunks": [],
+            "evaluation_result": {
+                "success": False,
+                "message": "저장된 청크가 없습니다"
+            },
+            "react_steps": [action_step, observation_step]
+        }
     
     try:
-        # 현재 상태에서 필요한 정보 추출
-        searched_papers = state.get("searched_papers", [])
-        original_question = state.get("original_question", "")
-        paper_count = state.get("paper_count", 3)
+        # PDF 파이프라인에서 벡터스토어 접근
+        logger.info("\nPDF 파이프라인에서 벡터스토어 접근...")
         
-        logger.info(f"입력:")
-        logger.info(f"  - 검색된 논문: {len(searched_papers)}개")
-        logger.info(f"  - 사용자 질문: {original_question[:100]}...")
-        logger.info(f"  - 원하는 논문 수: {paper_count}개")
+        pipeline = get_pdf_pipeline()
+        vectorstore = pipeline.vectorstore
+        embedding_model = pipeline.embedding_model
         
-        # 입력 검증
-        if not searched_papers:
-            logger.warning("검색된 논문이 없습니다")
-            return {
-                "relevant_papers": [],
-                "evaluation_result": {
-                    "success": False,
-                    "message": "검색된 논문이 없습니다"
-                }
-            }
+        logger.info("✓ 벡터스토어 접근 성공")
         
-        if not original_question:
-            logger.warning("원래 질문이 없습니다")
-            return {
-                "relevant_papers": [],
-                "evaluation_result": {
-                    "success": False,
-                    "message": "질문 정보가 없습니다"
-                }
-            }
+        # Step 1: 사용자 질문을 임베딩
+        logger.info("\nStep 1: 질문 임베딩 생성...")
         
-        # WorkflowIntegration을 사용하여 의미 기반 평가 수행
-        integration = get_workflow_integration()
+        query_embedding = embedding_model.embed(user_question)
         
-        # 평가 수행
-        # 여기서 당신의 embeddings.py의 calculate_semantic_similarity가 내부적으로 사용됩니다
-        evaluation_result = integration.process_search_results_for_evaluation(
-            arxiv_papers=searched_papers,
-            original_query=original_question,
-            num_papers_to_return=paper_count,
-            similarity_threshold=0.3  # 유사도 임계값 (필요시 조정 가능)
+        logger.info(f"✓ 임베딩 완료 (차원: {len(query_embedding)})")
+        
+        # Step 2: ChromaDB에서 검색
+        logger.info(f"\nStep 2: ChromaDB에서 검색 (상위 {paper_count * 3}개)...")
+        
+        search_results = vectorstore.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=paper_count * 3,
+            include=["documents", "metadatas", "distances"]
         )
         
-        logger.info(f"\n평가 결과:")
-        logger.info(f"  - 평가된 논문: {evaluation_result['evaluation_details'].get('total_papers_evaluated', 0)}개")
-        logger.info(f"  - 통과한 논문: {evaluation_result['evaluation_details'].get('papers_passed_threshold', 0)}개")
-        logger.info(f"  - 최종 반환 논문: {len(evaluation_result['relevant_papers'])}개")
+        logger.info(f"✓ 검색 완료: {len(search_results['ids'][0]) if search_results['ids'] else 0}개 청크 발견")
         
-        # 의미 기반 점수와 함께 최종 논문 리스트 구성
-        relevant_papers = []
+        # Step 3: 검색 결과 처리
+        logger.info("\nStep 3: 검색 결과 처리...")
         
-        for i, paper in enumerate(evaluation_result['relevant_papers'], 1):
-            semantic_score = paper.get('semantic_score', 0)
-            
-            logger.info(f"\n{i}. {paper['title']}")
-            logger.info(f"   - 의미 유사도: {semantic_score:.4f}")
-            logger.info(f"   - 저자: {', '.join(paper.get('authors', [])[:2])}")
-            logger.info(f"   - arXiv ID: {paper['arxiv_id']}")
-            
-            relevant_papers.append({
-                'arxiv_id': paper['arxiv_id'],
-                'title': paper['title'],
-                'abstract': paper['abstract'],
-                'authors': paper.get('authors', []),
-                'categories': paper.get('categories', []),
-                'published_date': paper.get('published_date', ''),
-                'pdf_url': paper.get('pdf_url', ''),
-                'html_url': paper.get('html_url', ''),
-                'semantic_relevance_score': semantic_score
-            })
+        relevant_chunks = []
         
-        logger.info("\n✓ 의미 기반 평가 완료\n")
+        if search_results['ids'] and len(search_results['ids']) > 0:
+            for i, chunk_id in enumerate(search_results['ids'][0]):
+                distance = search_results['distances'][0][i]
+                similarity_score = 1 - distance  # 거리를 유사도로 변환
+                
+                metadata = search_results['metadatas'][0][i] if search_results['metadatas'] else {}
+                chunk_content = search_results['documents'][0][i] if search_results['documents'] else ''
+                
+                chunk_info = {
+                    'chunk_id': chunk_id,
+                    'content': chunk_content,
+                    'similarity_score': float(similarity_score),
+                    'arxiv_id': metadata.get('arxiv_id', ''),
+                    'title': metadata.get('title', ''),
+                    'section': metadata.get('section', ''),
+                    'page_number': int(metadata.get('page_number', 1)) if metadata.get('page_number') else 1,
+                    'chunk_index': metadata.get('chunk_index', ''),
+                    'authors': metadata.get('authors', ''),
+                    'metadata': metadata
+                }
+                
+                relevant_chunks.append(chunk_info)
+                
+                if i < 3:  # 상위 3개만 로깅
+                    logger.debug(f"  청크 {i+1}: 유사도 {similarity_score:.4f}")
         
-        # 상태 업데이트
+        logger.info(f"✓ {len(relevant_chunks)}개 청크 처리 완료")
+        
+        # 상위 청크 정보로 관찰 작성
+        observation_parts = [f"의미 기반 검색 완료: {len(relevant_chunks)}개 청크 발견"]
+        observation_parts.append("\n가장 관련성 높은 상위 3개 청크:")
+        
+        for i, chunk in enumerate(relevant_chunks[:3], 1):
+            observation_parts.append(f"\n{i}. 유사도: {chunk['similarity_score']:.4f}")
+            observation_parts.append(f"   논문: {chunk['title'][:40] if chunk['title'] else 'N/A'}...")
+            if chunk.get('section'):
+                observation_parts.append(f"   섹션: {chunk['section']}")
+            observation_parts.append(f"   내용: {chunk['content'][:60]}...")
+        
+        observation_content = "\n".join(observation_parts)
+        
+        observation_step = ReActStep(
+            step_type="observation",
+            content=observation_content
+        )
+        
+        logger.info(f"\n✓ 의미 기반 검색 완료")
+        
         return {
-            "relevant_papers": relevant_papers,
+            "relevant_chunks": relevant_chunks[:paper_count * 2],
             "evaluation_result": {
-                "success": evaluation_result['success'],
-                "message": evaluation_result['message'],
-                "details": evaluation_result['evaluation_details']
-            }
+                "success": True,
+                "message": f"{len(relevant_chunks)}개의 관련 청크를 찾았습니다"
+            },
+            "react_steps": [action_step, observation_step]
         }
     
     except Exception as e:
-        logger.error(f"❌ 평가 중 오류: {str(e)}", exc_info=True)
+        logger.error(f"검색 중 오류: {str(e)}", exc_info=True)
         
-        # 오류 발생 시에도 논문 리스트를 반환하되 점수를 0으로 설정
-        # 이렇게 하면 워크플로우가 완전히 실패하지 않습니다
-        fallback_papers = []
-        for paper in state.get("searched_papers", [])[:state.get("paper_count", 3)]:
-            fallback_papers.append({
-                'arxiv_id': paper.get('arxiv_id', ''),
-                'title': paper.get('title', ''),
-                'abstract': paper.get('abstract', ''),
-                'authors': paper.get('authors', []),
-                'categories': paper.get('categories', []),
-                'published_date': paper.get('published_date', ''),
-                'pdf_url': paper.get('pdf_url', ''),
-                'html_url': paper.get('html_url', ''),
-                'semantic_relevance_score': 0.0
-            })
+        error_observation = ReActStep(
+            step_type="observation",
+            content=f"""의미 기반 검색 중 오류:
+{str(e)}
+
+원인 분석:
+- ChromaDB 연결 실패
+- 임베딩 모델 로드 실패
+- 질문 벡터화 실패"""
+        )
         
         return {
-            "relevant_papers": fallback_papers,
+            "relevant_chunks": [],
             "evaluation_result": {
                 "success": False,
-                "message": f"평가 중 오류 발생: {str(e)}",
-                "details": {}
-            }
+                "message": f"검색 중 오류: {str(e)}"
+            },
+            "react_steps": [action_step, error_observation]
         }
 
 
-# ===================================================================
-# 추가 헬퍼 함수들
-# ===================================================================
-
-def get_vectorstore_statistics() -> dict:
-    """
-    VectorStore의 통계 정보를 반환합니다.
-    필요시 workflow의 다른 부분에서 호출할 수 있습니다.
-    """
-    integration = get_workflow_integration()
-    return integration.get_statistics()
-
-
-def clear_vectorstore_for_new_session():
-    """
-    새로운 세션을 시작하기 전에 VectorStore를 초기화합니다.
-    여러 사용자가 동시에 검색하는 경우 필요할 수 있습니다.
-    """
-    integration = get_workflow_integration()
-    # 필요시 구현
-    logger.info("VectorStore 초기화 완료")
-
-
-# ===================================================================
-# 기존 다른 노드들도 이 패턴을 따릅니다
-# ===================================================================
-
-def search_papers_node(state: 'AgentState') -> dict:
-    """
-    당신의 기존 search_papers_node
-    이 노드는 arXiv API에서 논문을 검색하고 searched_papers를 설정합니다.
-    
-    상태 업데이트 예시:
-    {
-        "searched_papers": [
-            {
-                'arxiv_id': '2401.00001',
-                'title': '...',
-                'abstract': '...',
-                'authors': [...],
-                'categories': [...],
-                'published_date': '...',
-                'pdf_url': '...',
-                'html_url': '...'
-            },
-            ...
-        ]
-    }
-    """
-    # 당신의 기존 구현...
-    pass
-
-
-def summarize_papers_node(state: 'AgentState') -> dict:
-    """
-    당신의 기존 summarize_papers_node
-    이 노드는 relevant_papers를 받아서 요약을 생성합니다.
-    relevant_papers에는 semantic_relevance_score가 포함되어 있습니다.
-    
-    이제 semantic_relevance_score를 활용하여 더 나은 요약을 생성할 수 있습니다.
-    예를 들어, 점수가 높은 논문부터 우선적으로 요약할 수 있습니다.
-    """
-    # 당신의 기존 구현...
-    pass
-
-
-# ===================================================================
-# 실행 예시
-# ===================================================================
-
-if __name__ == "__main__":
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    
-    # 테스트용 상태 객체 생성
-    test_state = {
-        "original_question": "attention mechanisms in transformers",
-        "searched_papers": [
-            {
-                'arxiv_id': '2401.00001',
-                'title': 'Attention Mechanisms',
-                'abstract': 'This paper discusses attention mechanisms...',
-                'authors': ['John Doe'],
-                'categories': ['cs.LG'],
-                'published_date': '2024-01-15',
-                'pdf_url': 'https://...',
-                'html_url': 'https://...'
-            },
-            {
-                'arxiv_id': '2401.00002',
-                'title': 'Transformers',
-                'abstract': 'This paper proposes efficient transformers...',
-                'authors': ['Jane Smith'],
-                'categories': ['cs.LG'],
-                'published_date': '2024-01-18',
-                'pdf_url': 'https://...',
-                'html_url': 'https://...'
-            }
-        ],
-        "paper_count": 2
-    }
-    
-    # evaluate_relevance_node 호출
-    result = evaluate_relevance_node(test_state)
-    
-    print("\n평가 결과:")
-    print(f"성공: {result['evaluation_result']['success']}")
-    print(f"메시지: {result['evaluation_result']['message']}")
-    print(f"논문 수: {len(result['relevant_papers'])}")
-
-
 # ============================================
-# 노드 9: 논문 요약 생성 (summarize_papers)
+# 노드 9: 논문 요약 생성 (summarize_papers_node)
 # ============================================
 
 SUMMARIZE_PROMPT = """
@@ -698,11 +821,26 @@ SUMMARIZE_PROMPT = """
 
 
 def summarize_papers_node(state: AgentState) -> dict:
-    """선별된 논문들의 요약을 생성합니다."""
-    relevant_papers = state.get("relevant_papers", [])
+    """
+    관련 청크들이 속한 논문들의 요약을 생성합니다.
     
-    if not relevant_papers:
+    청크 기반 검색에서 반환된 관련 청크들로부터
+    논문 정보를 추출하고, 각 논문의 초록을 요약합니다.
+    """
+    
+    relevant_chunks = state.get("relevant_chunks", [])
+    papers = state.get("papers", [])
+    
+    logger.info("="*60)
+    logger.info("[SUMMARIZE_PAPERS] 논문 요약 생성")
+    logger.info("="*60)
+    logger.info(f"관련 청크: {len(relevant_chunks)}개")
+    logger.info(f"원본 논문: {len(papers)}개")
+    
+    if not relevant_chunks and not papers:
+        logger.warning("요약할 논문이 없음")
         return {
+            "summarized_content": "요약할 논문이 없습니다.",
             "react_steps": [ReActStep(
                 step_type="observation",
                 content="요약할 논문이 없습니다."
@@ -714,102 +852,152 @@ def summarize_papers_node(state: AgentState) -> dict:
         
         action_step = ReActStep(
             step_type="action",
-            content=f"{len(relevant_papers)}개 논문의 요약을 생성합니다."
+            content=f"관련 논문들의 요약을 생성합니다."
         )
         
-        summarized_papers = []
+        # 관련 청크에서 논문 정보 추출
+        seen_papers = {}
+        for chunk in relevant_chunks[:10]:  # 최대 10개 청크 처리
+            arxiv_id = chunk.get('arxiv_id')
+            if arxiv_id and arxiv_id not in seen_papers:
+                seen_papers[arxiv_id] = {
+                    'title': chunk.get('title', ''),
+                    'abstract': chunk.get('content', ''),  # 청크 내용을 요약 대상으로
+                    'authors': chunk.get('authors', ''),
+                }
         
-        for paper in relevant_papers:
+        logger.info(f"추출된 논문: {len(seen_papers)}개")
+        
+        # 각 논문 요약 생성
+        summary_parts = []
+        
+        for arxiv_id, paper_info in list(seen_papers.items())[:5]:  # 최대 5개 요약
             try:
-                prompt = SUMMARIZE_PROMPT.format(
-                    title=paper.title,
-                    abstract=paper.abstract[:500] if paper.abstract else "초록 없음"
-                )
-                
-                response = llm.invoke([
-                    HumanMessage(content=prompt)
-                ])
-                
-                paper.summary = response.content
-                summarized_papers.append(paper)
-                
+                if paper_info['title']:
+                    prompt = SUMMARIZE_PROMPT.format(
+                        title=paper_info['title'],
+                        abstract=paper_info['abstract'][:500]
+                    )
+                    
+                    response = llm.invoke([
+                        HumanMessage(content=prompt)
+                    ])
+                    
+                    summary_parts.append(f"\n## {paper_info['title']}\n\n{response.content}")
+                    logger.debug(f"✓ {paper_info['title'][:30]}... 요약 완료")
+                    
             except Exception as e:
                 logger.warning(f"논문 요약 실패: {str(e)}")
-                paper.summary = "요약 생성 실패"
-                summarized_papers.append(paper)
+                summary_parts.append(f"\n## {paper_info['title']}\n\n요약 생성 실패")
+        
+        summarized_content = "\n".join(summary_parts) if summary_parts else "요약을 생성할 수 없습니다."
         
         observation_step = ReActStep(
             step_type="observation",
-            content=f"{len(summarized_papers)}개 논문의 요약이 완료되었습니다."
+            content=f"{len(summary_parts)}개 논문의 요약이 완료되었습니다."
         )
         
+        logger.info(f"✓ {len(summary_parts)}개 요약 생성 완료")
+        
         return {
-            "relevant_papers": summarized_papers,
+            "summarized_content": summarized_content,
             "react_steps": [action_step, observation_step]
         }
         
     except Exception as e:
-        logger.error(f"요약 생성 중 오류: {str(e)}")
+        logger.error(f"요약 생성 중 오류: {str(e)}", exc_info=True)
         return {
-            "relevant_papers": relevant_papers,
+            "summarized_content": f"요약 생성 중 오류: {str(e)}",
             "react_steps": [ReActStep(step_type="observation", content=f"요약 생성 오류: {str(e)}")]
         }
 
 
 # ============================================
-# 노드 10: 최종 응답 생성 (generate_response)
+# 노드 10: 최종 응답 생성 (generate_response_node)
 # ============================================
 
 FINAL_RESPONSE_PROMPT = """
-사용자의 질문에 대해 검색된 논문들을 바탕으로 종합적인 답변을 생성해주세요.
+사용자의 질문에 대해 검색된 정보를 바탕으로 종합적인 답변을 생성해주세요.
 
 ## 사용자 질문
 {question}
 
-## 검색된 논문들
+## 검색된 정보
 {papers_info}
 
-## 답변 형식
+## 요약된 논문
+{summarized_content}
 
-친절하고 자세한 답변을 작성해주세요:
-1. 질문에 대한 직접적인 답변
-2. 관련 연구 동향 요약
-3. 각 논문의 요약
-4. 추가 탐구 제안
+## 답변 작성 지침
+1. 질문에 대한 직접적인 답변으로 시작하세요.
+2. 관련 연구 동향을 설명하세요.
+3. 검색된 논문들의 주요 내용을 인용하면서 설명하세요.
+4. 추가 학습이나 탐구를 위한 제안을 제시하세요.
+5. 한국어로 자세하고 전문적인 답변을 작성하세요.
 
-답변은 한국어로 작성해주세요.
+답변의 길이: 500-1500 글자
 """
 
 
 def generate_response_node(state: AgentState) -> dict:
-    """검색 결과를 종합하여 최종 응답을 생성합니다."""
-    user_question = state["user_question"]
-    relevant_papers = state.get("relevant_papers", [])
+    """
+    검색 결과와 요약을 바탕으로 최종 답변을 생성합니다.
+    
+    이것이 사용자에게 보여질 최종 결과입니다.
+    """
+    
+    user_question = state.get("user_question", "")
+    relevant_chunks = state.get("relevant_chunks", [])
+    summarized_content = state.get("summarized_content", "")
     error_message = state.get("error_message")
     
+    logger.info("="*60)
+    logger.info("[GENERATE_RESPONSE] 최종 응답 생성")
+    logger.info("="*60)
+    
     if error_message:
+        logger.warning(f"이전 단계에서 오류 발생: {error_message}")
         return {
-            "final_response": f"검색 중 오류가 발생했습니다: {error_message}",
+            "final_response": f"""죄송하지만 검색 중 오류가 발생했습니다.
+
+오류 내용: {error_message}
+
+다음을 시도해주세요:
+1. 다른 키워드로 검색해보세요
+2. 검색할 논문 수를 줄여보세요
+3. 나중에 다시 시도해보세요""",
             "is_complete": True
         }
     
-    if not relevant_papers:
+    if not relevant_chunks:
+        logger.warning("관련 청크가 없음")
         return {
-            "final_response": "입력하신 질문과 관련된 논문을 찾지 못했습니다.\n더 구체적인 키워드로 다시 시도해주세요.",
+            "final_response": """입력하신 질문과 관련된 논문을 찾지 못했습니다.
+
+다음을 시도해주세요:
+1. 더 일반적인 키워드를 사용하세요
+2. 검색할 논문 수를 늘려보세요
+3. 다른 표현으로 질문을 다시 작성하세요""",
             "is_complete": True
         }
     
     try:
-        papers_info = ""
-        for i, paper in enumerate(relevant_papers, 1):
-            authors = ', '.join(paper.authors[:3]) if paper.authors else "미상"
-            papers_info += f"\n\n논문 {i}: {paper.title}\n저자: {authors}\n요약: {paper.summary[:200] if paper.summary else '요약 없음'}..."
-        
         llm = get_llm()
+        
+        # 관련 청크 정보 정리
+        papers_info = ""
+        for i, chunk in enumerate(relevant_chunks[:5], 1):
+            papers_info += f"\n\n{i}. {chunk['title']}\n"
+            papers_info += f"유사도: {chunk['similarity_score']:.2%}\n"
+            papers_info += f"내용: {chunk['content'][:150]}..."
+        
         prompt = FINAL_RESPONSE_PROMPT.format(
             question=user_question,
-            papers_info=papers_info
+            papers_info=papers_info,
+            summarized_content=summarized_content[:500]
         )
+        
+        logger.info("LLM에 최종 응답 요청...")
         
         response = llm.invoke([
             SystemMessage(content="당신은 친절하고 전문적인 학술 연구 어시스턴트입니다."),
@@ -818,13 +1006,19 @@ def generate_response_node(state: AgentState) -> dict:
         
         final_response = response.content
         
+        logger.info("✓ 최종 응답 생성 완료")
+        
     except Exception as e:
-        logger.error(f"최종 응답 생성 중 오류: {str(e)}")
-        final_response = f"검색된 {len(relevant_papers)}개의 논문을 찾았습니다.{papers_info}"
+        logger.error(f"최종 응답 생성 중 오류: {str(e)}", exc_info=True)
+        final_response = f"""검색된 {len(relevant_chunks)}개의 관련 청크를 찾았습니다.
+
+{summarized_content}
+
+오류로 인해 상세한 분석을 완성하지 못했습니다: {str(e)}"""
     
     decision_step = ReActStep(
         step_type="thought",
-        content="최종 응답 생성이 완료되었습니다."
+        content="모든 처리가 완료되었습니다."
     )
     
     return {
