@@ -10,7 +10,7 @@
 
 세션 기반 상태 관리로 사용자의 대화 흐름을 완벽하게 추적합니다.
 
-수정 사항: Gradio 6.3.0 호환성 - ChatMessage를 dict로 변경
+수정 사항: Gradio 6.3.0 최신 API - type 파라미터 제거, theme을 launch()로 이동
 """
 
 import os
@@ -79,12 +79,16 @@ session_data = {}  # {session_id: {"assistant": ResearchAssistant, "state": {...
 def get_or_create_session(session_id: str):
     """세션을 가져오거나 새로 생성합니다."""
     if session_id not in session_data:
-        from app.graph.workflow import ResearchAssistant
-        session_data[session_id] = {
-            "assistant": ResearchAssistant(),
-            "current_interrupt_stage": 0,  # 0=아직 시작 안함, 1=키워드 확인 대기, 2=논문수 선택 대기
-            "last_user_message": None
-        }
+        try:
+            from app.graph.workflow import ResearchAssistant
+            session_data[session_id] = {
+                "assistant": ResearchAssistant(),
+                "current_interrupt_stage": 0,  # 0=아직 시작 안함, 1=키워드 확인 대기, 2=논문수 선택 대기
+                "last_user_message": None
+            }
+        except ImportError as e:
+            logger.error(f"ResearchAssistant import 실패: {str(e)}")
+            raise
     return session_data[session_id]
 
 
@@ -114,7 +118,7 @@ def process_chat_message(
     # API 키 확인
     has_key, key_or_message = check_api_key()
     if not has_key:
-        # Gradio 6.3.0: ChatMessage 대신 dict 사용
+        # Gradio 6.3.0: dict 형식의 메시지 사용
         history.append(create_user_message(message))
         history.append(create_assistant_message(key_or_message))
         return "", history, state
@@ -124,7 +128,16 @@ def process_chat_message(
         state["session_id"] = str(uuid.uuid4())
     
     session_id = state["session_id"]
-    session = get_or_create_session(session_id)
+    
+    try:
+        session = get_or_create_session(session_id)
+    except Exception as e:
+        error_msg = f"세션 생성 실패: {str(e)}\n\napp/graph/workflow.py 파일이 존재하는지 확인해주세요."
+        logger.error(error_msg)
+        history.append(create_user_message(message))
+        history.append(create_assistant_message(error_msg))
+        return "", history, state
+    
     assistant = session["assistant"]
     
     # 사용자 메시지를 히스토리에 추가 (Gradio 6.3.0: dict 사용)
@@ -259,19 +272,28 @@ def quick_search(question: str, paper_count: int) -> str:
 
 
 # ============================================
-# Gradio 인터페이스
+# Gradio 인터페이스 생성
 # ============================================
-
-theme = gr.themes.Soft(
-    primary_hue="blue",
-    secondary_hue="slate",
-)
-
+# PDF 파이프라인 미리 초기화 (모델 로드)
+logger.info("PDF 임베딩 파이프라인을 미리 로드하는 중...")
+try:
+    from app.graph.workflow import get_pdf_pipeline
+    pipeline = get_pdf_pipeline()
+    logger.info("✓ PDF 파이프라인 로드 완료")
+except Exception as e:
+    logger.warning(f"PDF 파이프라인 로드 경고: {str(e)}")
+    logger.info("파이프라인은 첫 검색 시 로드됩니다")
 
 def create_app():
-    """Gradio 앱을 생성합니다."""
+    """
+    Gradio 6.3.0에 최적화된 앱을 생성합니다.
     
-    with gr.Blocks(title="AI Research Assistant", theme=theme) as demo:
+    주의: theme은 더 이상 Blocks 생성자에서 사용되지 않습니다.
+    대신 launch() 메서드에서 사용합니다.
+    """
+    
+    # Gradio 6.3.0: theme 파라미터 제거 (launch()에서 사용)
+    with gr.Blocks(title="AI-Research-Assistant") as demo:
         # 헤더
         gr.Markdown("""
         # AI Research Assistant
@@ -310,9 +332,9 @@ def create_app():
                     "session_id": None
                 })
                 
-                # Gradio 6.3.0: type="messages" 사용
+                # Gradio 6.3.0: type 파라미터 제거
+                # Chatbot은 기본적으로 메시지 형식을 지원합니다
                 chatbot = gr.Chatbot(
-                    type="messages",
                     height=500,
                     show_label=False,
                     avatar_images=(None, "https://em-content.zobj.net/source/twitter/376/robot_1f916.png")
@@ -399,7 +421,7 @@ def create_app():
             with gr.Tab("정보"):
                 
                 has_key, _ = check_api_key()
-                status_text = "설정됨" if has_key else "설정 필요"
+                status_text = "설정됨 ✓" if has_key else "설정 필요 ✗"
                 
                 gr.Markdown(f"""
                 ## 시스템 정보
@@ -440,7 +462,7 @@ def create_app():
                 
                 ---
                 
-                **버전**: 2.2 (Gradio 6.3.0 호환) | **개발**: AI Hackathon Project
+                **버전**: 2.3 (Gradio 6.3.0 완전 호환) | **개발**: AI Hackathon Project
                 """)
         
         # 푸터
@@ -465,15 +487,23 @@ if __name__ == "__main__":
     
     logger.info("="*60)
     logger.info("ARA (AI Research Assistant) 애플리케이션 시작")
-    logger.info("Gradio 버전: 6.3.0 호환")
+    logger.info("Gradio 버전: 6.3.0 완전 호환")
     logger.info("="*60)
     
     try:
         demo = create_app()
+        
+        # Gradio 6.3.0: theme 파라미터는 launch()에서 사용
+        theme = gr.themes.Soft(
+            primary_hue="blue",
+            secondary_hue="slate",
+        )
+        
         demo.launch(
             server_name="0.0.0.0",
             server_port=7860,
-            share=True
+            share=True,
+            theme=theme
         )
     except Exception as e:
         logger.error(f"앱 시작 실패: {str(e)}", exc_info=True)
