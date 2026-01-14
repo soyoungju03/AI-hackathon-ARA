@@ -1,3 +1,18 @@
+---
+title: AI Research Assistant
+emoji: 🤖
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: 4.14.0
+app_file: app.py
+pinned: false
+---
+
+# AI Research Assistant
+
+여기에 여러분의 기존 프로젝트 설명이 이어집니다...
+
 # 📚 AI Research Assistant
 
 학술 논문 기반 지능형 연구 도우미 - LangGraph + ReAct Pattern + Human-in-the-Loop
