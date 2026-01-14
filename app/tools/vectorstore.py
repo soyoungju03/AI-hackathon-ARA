@@ -1,6 +1,11 @@
 """
-ARA 프로젝트를 위한 ChromaDB 벡터 스토어 통합 모듈
+ARA 프로젝트를 위한 ChromaDB 벡터 스토어 통합 모듈 (수정 버전)
 당신의 workflow.py와 embeddings.py와 완벽하게 호환됩니다.
+
+주요 수정사항:
+1. ChromaDB 새로운 클라이언트 방식 (PersistentClient) 사용
+2. Deprecated Settings 제거
+3. 경고 메시지 해결
 
 구조:
 1. ArxivPaperVectorStore: 논문 데이터 관리
@@ -9,13 +14,11 @@ ARA 프로젝트를 위한 ChromaDB 벡터 스토어 통합 모듈
 """
 
 import chromadb
-from chromadb.config import Settings
 import logging
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 import json
 from datetime import datetime
-import numpy as np
 
 # 당신의 embeddings 모듈에서 필요한 함수 import
 try:
@@ -64,20 +67,28 @@ class ArxivPaperVectorStore:
         # 디렉토리 생성
         Path(persist_directory).mkdir(parents=True, exist_ok=True)
         
-        # ChromaDB 초기화
-        settings = Settings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory=persist_directory,
-            anonymized_telemetry=False
-        )
-        
-        self.client = chromadb.Client(settings)
+        # ChromaDB 새로운 클라이언트 방식: PersistentClient 사용
+        # 이것은 데이터를 디스크에 저장하고, 경고 메시지를 발생시키지 않습니다
+        try:
+            self.client = chromadb.PersistentClient(path=persist_directory)
+            logger.info(f"✓ ChromaDB PersistentClient 초기화 완료")
+        except Exception as e:
+            logger.error(f"ChromaDB 초기화 실패: {str(e)}")
+            logger.info("대신 EphemeralClient (메모리 기반)를 사용합니다")
+            self.client = chromadb.EphemeralClient()
         
         # 컬렉션 생성 또는 연결
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"}
-        )
+        # metadata에서 hnsw:space를 지정하여 코사인 유사도 사용
+        try:
+            self.collection = self.client.get_or_create_collection(
+                name=collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
+        except TypeError:
+            # 버전에 따라 metadata 파라미터를 지원하지 않을 수 있으므로
+            self.collection = self.client.get_or_create_collection(
+                name=collection_name
+            )
         
         # 로그 디렉토리
         self.log_dir = Path(persist_directory) / "logs"

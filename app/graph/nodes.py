@@ -60,9 +60,12 @@ def get_pdf_pipeline():
             # distiluse-base-multilingual-cased-v2는 한국어를 포함한 여러 언어를 지원합니다
             # 모델 크기는 약 100MB이고, 처음 로드 시 Hugging Face에서 다운로드됩니다
             embedding_model = SentenceTransformerEmbedding(
-                model_name="distiluse-base-multilingual-cased-v2"
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+            # model_name="sentence-transformers/all-MiniLM-L6-v2"  # 약 80MB, 더 빠름
             )
-            
+            #model_name="sentence-transformers/distiluse-base-multilingual-cased-v2" #영어 전용 모델
+
+
             # Step 2: ChromaDB 벡터 스토어 초기화
             # 이것은 당신의 vectorstore.py에 정의된 ArxivPaperVectorStore입니다
             vectorstore = ArxivPaperVectorStore(
