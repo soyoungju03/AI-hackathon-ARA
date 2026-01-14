@@ -386,18 +386,57 @@ def search_papers_node(state: AgentState) -> dict:
 # ============================================
 # 노드 8: 연관성 평가 (evaluate_relevance)
 # ============================================
+# nodes.py의 evaluate_relevance_node 함수 수정
+
+from app.tools.embeddings import calculate_semantic_similarity
 
 def evaluate_relevance_node(state: AgentState) -> dict:
-    """검색된 논문들의 연관성을 재평가하고 필터링합니다."""
-    papers = state.get("papers", [])
-    threshold = getattr(settings, 'relevance_threshold', 0.5)
+    """
+    검색된 논문들의 연관성을 재평가하고 필터링합니다.
     
+    Sentence Transformers를 사용하여 사용자 질문과
+    각 논문의 의미적 유사도를 계산합니다.
+    """
+    papers = state.get("papers", [])
+    user_question = state.get("user_question", "")
+    threshold = getattr(settings, 'relevance_threshold', 0.6)
+    
+    logger.info(f"의미 기반 연관성 평가 시작: {len(papers)}개 논문")
+    
+    # 각 논문에 대해 의미적 유사도를 계산합니다
+    for paper in papers:
+        # 제목과 초록을 결합하여 문서 텍스트를 만듭니다
+        # 제목에 더 큰 가중치를 두기 위해 제목을 두 번 포함합니다
+        document_text = f"{paper.title} {paper.title} {paper.abstract[:300]}"
+        
+        # 의미적 유사도 계산
+        similarity = calculate_semantic_similarity(user_question, document_text)
+        
+        # 기존 점수와 결합 (기존 점수가 있다면)
+        if paper.relevance_score > 0:
+            # 의미 유사도 70%, 기존 점수 30%로 가중 평균
+            paper.relevance_score = 0.7 * similarity + 0.3 * paper.relevance_score
+        else:
+            paper.relevance_score = similarity
+        
+        logger.info(f"  {paper.title[:50]}... → 유사도: {paper.relevance_score:.3f}")
+    
+    # 유사도 기준으로 정렬 (높은 것부터)
+    papers.sort(key=lambda p: p.relevance_score, reverse=True)
+    
+    # 임계값 이상인 논문만 선택
     relevant_papers = [p for p in papers if p.relevance_score >= threshold]
     
+    # 만약 임계값을 넘는 논문이 없다면, 상위 3개는 포함
     if not relevant_papers and papers:
         relevant_papers = papers[:min(3, len(papers))]
+        logger.info(f"임계값을 넘는 논문이 없어 상위 {len(relevant_papers)}개를 선택합니다")
     
-    thought_content = f"연관성 평가 완료:\n- 전체 검색 결과: {len(papers)}개\n- 임계값({threshold}) 이상: {len(relevant_papers)}개"
+    thought_content = f"""의미 기반 연관성 평가 완료:
+- 전체 검색 결과: {len(papers)}개
+- 임계값({threshold}) 이상: {len(relevant_papers)}개
+- 최고 유사도: {papers[0].relevance_score:.3f} ({papers[0].title[:40]}...)
+- 최저 유사도: {papers[-1].relevance_score:.3f} ({papers[-1].title[:40]}...)"""
     
     new_step = ReActStep(
         step_type="thought",
@@ -408,6 +447,8 @@ def evaluate_relevance_node(state: AgentState) -> dict:
         "relevant_papers": relevant_papers,
         "react_steps": [new_step]
     }
+#nodes.py의 evaluate_relevance_node 함수를 수정
+#기존 relevance_score를 임계값과 비교-->사용자 질문과의 의미적 유사도도로 대체
 
 
 # ============================================
