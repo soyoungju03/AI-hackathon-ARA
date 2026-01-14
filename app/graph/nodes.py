@@ -17,6 +17,7 @@
 import logging
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from app.tools.vectorstore import WorkflowIntegration
 
 from app.graph.state import (
     AgentState, 
@@ -388,67 +389,283 @@ def search_papers_node(state: AgentState) -> dict:
 # ============================================
 # nodes.py의 evaluate_relevance_node 함수 수정
 
-from app.tools.embeddings import calculate_semantic_similarity
+"""
+app/graph/nodes.py에서 evaluate_relevance_node를 수정하는 방법
 
-def evaluate_relevance_node(state: AgentState) -> dict:
+이것은 당신의 기존 코드에 VectorStore 통합을 추가하는 방법을 보여줍니다.
+"""
+
+# nodes.py의 임포트 부분에 추가
+from app.tools.vectorstore_integrated import WorkflowIntegration
+import logging
+
+logger = logging.getLogger(__name__)
+
+# 전역 변수로 WorkflowIntegration 인스턴스 생성 (싱글톤 패턴)
+_workflow_integration = None
+
+def get_workflow_integration() -> 'WorkflowIntegration':
     """
-    검색된 논문들의 연관성을 재평가하고 필터링합니다.
-    
-    Sentence Transformers를 사용하여 사용자 질문과
-    각 논문의 의미적 유사도를 계산합니다.
+    WorkflowIntegration 인스턴스를 가져옵니다.
+    싱글톤 패턴을 사용하여 앱 전체에서 하나의 인스턴스만 사용합니다.
     """
-    papers = state.get("papers", [])
-    user_question = state.get("user_question", "")
-    threshold = getattr(settings, 'relevance_threshold', 0.6)
+    global _workflow_integration
+    if _workflow_integration is None:
+        _workflow_integration = WorkflowIntegration(
+            persist_directory="./data/arxiv_vectorstore"
+        )
+    return _workflow_integration
+
+
+# ===================================================================
+# 수정된 evaluate_relevance_node 예시
+# ===================================================================
+
+def evaluate_relevance_node(state: 'AgentState') -> dict:
+    """
+    의미 기반 관련성 평가 노드
     
-    logger.info(f"의미 기반 연관성 평가 시작: {len(papers)}개 논문")
+    당신의 embeddings.py와 VectorStore를 사용하여
+    검색된 논문들을 의미론적으로 평가합니다.
     
-    # 각 논문에 대해 의미적 유사도를 계산합니다
-    for paper in papers:
-        # 제목과 초록을 결합하여 문서 텍스트를 만듭니다
-        # 제목에 더 큰 가중치를 두기 위해 제목을 두 번 포함합니다
-        document_text = f"{paper.title} {paper.title} {paper.abstract[:300]}"
+    Args:
+        state: AgentState 객체, 다음 필드를 포함해야 함:
+            - searched_papers: arXiv API에서 검색한 논문 리스트
+            - original_question: 사용자의 원래 질문
+            - paper_count: 사용자가 선택한 논문 개수
+    
+    Returns:
+        상태 업데이트 딕셔너리:
+            - relevant_papers: 의미 기반으로 선별된 논문 리스트
+            - evaluation_result: 평가 결과 상세정보
+    """
+    
+    logger.info("="*60)
+    logger.info("[EVALUATE_RELEVANCE_NODE] 의미 기반 평가 시작")
+    logger.info("="*60)
+    
+    try:
+        # 현재 상태에서 필요한 정보 추출
+        searched_papers = state.get("searched_papers", [])
+        original_question = state.get("original_question", "")
+        paper_count = state.get("paper_count", 3)
         
-        # 의미적 유사도 계산
-        similarity = calculate_semantic_similarity(user_question, document_text)
+        logger.info(f"입력:")
+        logger.info(f"  - 검색된 논문: {len(searched_papers)}개")
+        logger.info(f"  - 사용자 질문: {original_question[:100]}...")
+        logger.info(f"  - 원하는 논문 수: {paper_count}개")
         
-        # 기존 점수와 결합 (기존 점수가 있다면)
-        if paper.relevance_score > 0:
-            # 의미 유사도 70%, 기존 점수 30%로 가중 평균
-            paper.relevance_score = 0.7 * similarity + 0.3 * paper.relevance_score
-        else:
-            paper.relevance_score = similarity
+        # 입력 검증
+        if not searched_papers:
+            logger.warning("검색된 논문이 없습니다")
+            return {
+                "relevant_papers": [],
+                "evaluation_result": {
+                    "success": False,
+                    "message": "검색된 논문이 없습니다"
+                }
+            }
         
-        logger.info(f"  {paper.title[:50]}... → 유사도: {paper.relevance_score:.3f}")
+        if not original_question:
+            logger.warning("원래 질문이 없습니다")
+            return {
+                "relevant_papers": [],
+                "evaluation_result": {
+                    "success": False,
+                    "message": "질문 정보가 없습니다"
+                }
+            }
+        
+        # WorkflowIntegration을 사용하여 의미 기반 평가 수행
+        integration = get_workflow_integration()
+        
+        # 평가 수행
+        # 여기서 당신의 embeddings.py의 calculate_semantic_similarity가 내부적으로 사용됩니다
+        evaluation_result = integration.process_search_results_for_evaluation(
+            arxiv_papers=searched_papers,
+            original_query=original_question,
+            num_papers_to_return=paper_count,
+            similarity_threshold=0.3  # 유사도 임계값 (필요시 조정 가능)
+        )
+        
+        logger.info(f"\n평가 결과:")
+        logger.info(f"  - 평가된 논문: {evaluation_result['evaluation_details'].get('total_papers_evaluated', 0)}개")
+        logger.info(f"  - 통과한 논문: {evaluation_result['evaluation_details'].get('papers_passed_threshold', 0)}개")
+        logger.info(f"  - 최종 반환 논문: {len(evaluation_result['relevant_papers'])}개")
+        
+        # 의미 기반 점수와 함께 최종 논문 리스트 구성
+        relevant_papers = []
+        
+        for i, paper in enumerate(evaluation_result['relevant_papers'], 1):
+            semantic_score = paper.get('semantic_score', 0)
+            
+            logger.info(f"\n{i}. {paper['title']}")
+            logger.info(f"   - 의미 유사도: {semantic_score:.4f}")
+            logger.info(f"   - 저자: {', '.join(paper.get('authors', [])[:2])}")
+            logger.info(f"   - arXiv ID: {paper['arxiv_id']}")
+            
+            relevant_papers.append({
+                'arxiv_id': paper['arxiv_id'],
+                'title': paper['title'],
+                'abstract': paper['abstract'],
+                'authors': paper.get('authors', []),
+                'categories': paper.get('categories', []),
+                'published_date': paper.get('published_date', ''),
+                'pdf_url': paper.get('pdf_url', ''),
+                'html_url': paper.get('html_url', ''),
+                'semantic_relevance_score': semantic_score
+            })
+        
+        logger.info("\n✓ 의미 기반 평가 완료\n")
+        
+        # 상태 업데이트
+        return {
+            "relevant_papers": relevant_papers,
+            "evaluation_result": {
+                "success": evaluation_result['success'],
+                "message": evaluation_result['message'],
+                "details": evaluation_result['evaluation_details']
+            }
+        }
     
-    # 유사도 기준으로 정렬 (높은 것부터)
-    papers.sort(key=lambda p: p.relevance_score, reverse=True)
+    except Exception as e:
+        logger.error(f"❌ 평가 중 오류: {str(e)}", exc_info=True)
+        
+        # 오류 발생 시에도 논문 리스트를 반환하되 점수를 0으로 설정
+        # 이렇게 하면 워크플로우가 완전히 실패하지 않습니다
+        fallback_papers = []
+        for paper in state.get("searched_papers", [])[:state.get("paper_count", 3)]:
+            fallback_papers.append({
+                'arxiv_id': paper.get('arxiv_id', ''),
+                'title': paper.get('title', ''),
+                'abstract': paper.get('abstract', ''),
+                'authors': paper.get('authors', []),
+                'categories': paper.get('categories', []),
+                'published_date': paper.get('published_date', ''),
+                'pdf_url': paper.get('pdf_url', ''),
+                'html_url': paper.get('html_url', ''),
+                'semantic_relevance_score': 0.0
+            })
+        
+        return {
+            "relevant_papers": fallback_papers,
+            "evaluation_result": {
+                "success": False,
+                "message": f"평가 중 오류 발생: {str(e)}",
+                "details": {}
+            }
+        }
+
+
+# ===================================================================
+# 추가 헬퍼 함수들
+# ===================================================================
+
+def get_vectorstore_statistics() -> dict:
+    """
+    VectorStore의 통계 정보를 반환합니다.
+    필요시 workflow의 다른 부분에서 호출할 수 있습니다.
+    """
+    integration = get_workflow_integration()
+    return integration.get_statistics()
+
+
+def clear_vectorstore_for_new_session():
+    """
+    새로운 세션을 시작하기 전에 VectorStore를 초기화합니다.
+    여러 사용자가 동시에 검색하는 경우 필요할 수 있습니다.
+    """
+    integration = get_workflow_integration()
+    # 필요시 구현
+    logger.info("VectorStore 초기화 완료")
+
+
+# ===================================================================
+# 기존 다른 노드들도 이 패턴을 따릅니다
+# ===================================================================
+
+def search_papers_node(state: 'AgentState') -> dict:
+    """
+    당신의 기존 search_papers_node
+    이 노드는 arXiv API에서 논문을 검색하고 searched_papers를 설정합니다.
     
-    # 임계값 이상인 논문만 선택
-    relevant_papers = [p for p in papers if p.relevance_score >= threshold]
-    
-    # 만약 임계값을 넘는 논문이 없다면, 상위 3개는 포함
-    if not relevant_papers and papers:
-        relevant_papers = papers[:min(3, len(papers))]
-        logger.info(f"임계값을 넘는 논문이 없어 상위 {len(relevant_papers)}개를 선택합니다")
-    
-    thought_content = f"""의미 기반 연관성 평가 완료:
-- 전체 검색 결과: {len(papers)}개
-- 임계값({threshold}) 이상: {len(relevant_papers)}개
-- 최고 유사도: {papers[0].relevance_score:.3f} ({papers[0].title[:40]}...)
-- 최저 유사도: {papers[-1].relevance_score:.3f} ({papers[-1].title[:40]}...)"""
-    
-    new_step = ReActStep(
-        step_type="thought",
-        content=thought_content
-    )
-    
-    return {
-        "relevant_papers": relevant_papers,
-        "react_steps": [new_step]
+    상태 업데이트 예시:
+    {
+        "searched_papers": [
+            {
+                'arxiv_id': '2401.00001',
+                'title': '...',
+                'abstract': '...',
+                'authors': [...],
+                'categories': [...],
+                'published_date': '...',
+                'pdf_url': '...',
+                'html_url': '...'
+            },
+            ...
+        ]
     }
-#nodes.py의 evaluate_relevance_node 함수를 수정
-#기존 relevance_score를 임계값과 비교-->사용자 질문과의 의미적 유사도도로 대체
+    """
+    # 당신의 기존 구현...
+    pass
+
+
+def summarize_papers_node(state: 'AgentState') -> dict:
+    """
+    당신의 기존 summarize_papers_node
+    이 노드는 relevant_papers를 받아서 요약을 생성합니다.
+    relevant_papers에는 semantic_relevance_score가 포함되어 있습니다.
+    
+    이제 semantic_relevance_score를 활용하여 더 나은 요약을 생성할 수 있습니다.
+    예를 들어, 점수가 높은 논문부터 우선적으로 요약할 수 있습니다.
+    """
+    # 당신의 기존 구현...
+    pass
+
+
+# ===================================================================
+# 실행 예시
+# ===================================================================
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # 테스트용 상태 객체 생성
+    test_state = {
+        "original_question": "attention mechanisms in transformers",
+        "searched_papers": [
+            {
+                'arxiv_id': '2401.00001',
+                'title': 'Attention Mechanisms',
+                'abstract': 'This paper discusses attention mechanisms...',
+                'authors': ['John Doe'],
+                'categories': ['cs.LG'],
+                'published_date': '2024-01-15',
+                'pdf_url': 'https://...',
+                'html_url': 'https://...'
+            },
+            {
+                'arxiv_id': '2401.00002',
+                'title': 'Transformers',
+                'abstract': 'This paper proposes efficient transformers...',
+                'authors': ['Jane Smith'],
+                'categories': ['cs.LG'],
+                'published_date': '2024-01-18',
+                'pdf_url': 'https://...',
+                'html_url': 'https://...'
+            }
+        ],
+        "paper_count": 2
+    }
+    
+    # evaluate_relevance_node 호출
+    result = evaluate_relevance_node(test_state)
+    
+    print("\n평가 결과:")
+    print(f"성공: {result['evaluation_result']['success']}")
+    print(f"메시지: {result['evaluation_result']['message']}")
+    print(f"논문 수: {len(result['relevant_papers'])}")
 
 
 # ============================================
