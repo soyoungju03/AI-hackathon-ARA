@@ -1,9 +1,3 @@
-# ChromaDB 데이터 파일 제외
-data/
-data/arxiv_chunks/
-*.sqlite3
-*.bin
-
 # API 키와 민감한 정보
 .env
 .env.local
