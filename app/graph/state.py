@@ -11,6 +11,7 @@ LangGraph State 정의 (PDF 임베딩 파이프라인 통합 버전)
 2. PDF 임베딩 파이프라인 결과 저장
 3. 청크 기반 검색 결과 추적
 4. ReAct 패턴 기록
+5. 재분석 모드 지원 (is_reanalyzing 플래그)
 
 데이터 흐름:
 user_question → extracted_keywords → papers → chunks_saved → 
@@ -131,8 +132,9 @@ class AgentState(TypedDict):
     6. 청크 검색: relevant_chunks (의미 기반 검색 결과)
     7. 요약: summarized_content
     8. Interrupt: interrupt_data, waiting_for, interrupt_stage
-    9. 기록: react_steps
-    10. 출력: final_response, error_message, is_complete
+    9. 재분석 모드: is_reanalyzing (새로 추가)
+    10. 기록: react_steps
+    11. 출력: final_response, error_message, is_complete
     """
     
     # ========== 입력 데이터 ==========
@@ -153,60 +155,39 @@ class AgentState(TypedDict):
     relevant_papers: List[Paper]
     
     # ========== PDF 처리 결과 ==========
-    # PDF 임베딩 파이프라인의 결과
-    chunks_saved: int  # 저장된 청크의 개수
-    pdf_processing_result: Optional[PDFProcessingResult]  # 상세 처리 결과
+    chunks_saved: int
+    pdf_processing_result: Optional[PDFProcessingResult]
     
     # ========== 청크 검색 결과 (의미 기반) ==========
-    # evaluate_relevance_node에서 반환된 결과
-    # 이전의 "relevant_papers"를 대체하는 청크 기반 검색 결과
     relevant_chunks: Annotated[List[Chunk], operator.add]
     
     # ========== 평가 결과 ==========
-    evaluation_result: Dict[str, Any]  # 평가 단계의 상세 결과
+    evaluation_result: Dict[str, Any]
     
     # ========== 요약 및 분석 ==========
-    summarized_content: str  # 관련 논문들의 요약
+    summarized_content: str
     
     # ========== ReAct 패턴 기록 ==========
-    # 모든 Thought - Action - Observation 단계를 기록
     react_steps: Annotated[List[ReActStep], operator.add]
     
     # ========== Interrupt 관련 필드 ==========
-    
-    # 현재 Interrupt 데이터
-    # Interrupt가 필요한 경우 이 필드에 사용자에게 보여줄 정보를 담습니다
     interrupt_data: Optional[InterruptData]
-    
-    # 무엇을 대기 중인가? (선택적 필드)
-    # None = 대기 없음
-    # "keyword_confirmation" = 사용자의 키워드 확인 대기
-    # "paper_count_selection" = 사용자의 논문 수 선택 대기
     waiting_for: Optional[Literal["keyword_confirmation", "paper_count_selection"]]
-    
-    # 현재 Interrupt 단계 (추적용)
-    # 0 = Interrupt 없음 또는 초기 상태
-    # 1 = 첫 번째 Interrupt (키워드 확인)
-    # 2 = 두 번째 Interrupt (논문 수 선택)
     interrupt_stage: int
-    
-    # 사용자의 응답 (Interrupt에 대한 응답)
-    # 모든 Interrupt 유형에서 사용됩니다
     user_response: Optional[str]
-    
-    # 사용자의 키워드 확인 응답 (선택적 필드)
-    # "confirmed" = 사용자가 키워드를 확인함
-    # "retry" = 사용자가 키워드 재분석을 요청함
     keyword_confirmation_response: Optional[Literal["confirmed", "retry"]]
-    
-    # 사용자가 대기 중인지 여부 (호환성용)
-    # waiting_for와 함께 사용되지만, 더 간단한 boolean 플래그입니다
     waiting_for_user: bool
     
+    # ========== 재분석 모드 (새로 추가) ==========
+    # "다시" 선택 시 키워드 재추출 후 자동으로 다음 단계로 진행하기 위한 플래그
+    # True: 재분석 중이므로 키워드 확인을 건너뜀
+    # False: 일반 모드, 사용자에게 키워드 확인 요청
+    is_reanalyzing: bool
+    
     # ========== 출력 ==========
-    final_response: str  # 사용자에게 보여줄 최종 답변
-    error_message: Optional[str]  # 발생한 오류 메시지
-    is_complete: bool  # 워크플로우가 완료되었는지 여부
+    final_response: str
+    error_message: Optional[str]
+    is_complete: bool
 
 
 def create_initial_state(
@@ -268,6 +249,9 @@ def create_initial_state(
         keyword_confirmation_response=None,
         waiting_for_user=False,
         
+        # === 재분석 모드 ===
+        is_reanalyzing=False,  # 초기값은 False (일반 모드)
+        
         # === 출력 ===
         final_response="",
         error_message=None,
@@ -293,15 +277,6 @@ def add_react_step(
     
     Returns:
         상태 업데이트 딕셔너리 (react_steps 필드 업데이트)
-    
-    사용 예:
-        ```python
-        thought_step = ReActStep(
-            step_type="thought",
-            content="사용자의 질문을 분석해야 한다."
-        )
-        return add_react_step(state, "thought", "사용자의 질문을 분석해야 한다.")
-        ```
     """
     new_step = ReActStep(
         step_type=step_type,

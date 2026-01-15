@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-수정된 LangGraph 노드들 (PDF 임베딩 파이프라인 완전 통합)
+수정된 LangGraph 노드들 (PDF 임베딩 파이프라인 완전 통합 + 재분석 모드)
 
 주요 기능:
 1. 두 단계 Human-in-the-Loop (키워드 확인 + 논문 수 선택)
 2. arXiv 검색 + PDF 임베딩 파이프라인 통합
 3. ChromaDB를 사용한 의미 기반 검색
 4. ReAct 패턴을 따른 투명한 AI 사고 과정
+5. 재분석 모드 지원 (is_reanalyzing 플래그)
 
 데이터 흐름:
-사용자 질문 → 분석 → 키워드 확인 → 논문 수 선택 →
-arXiv 검색 → PDF 다운로드 → 텍스트 추출 → 청킹 → 임베딩 →
+사용자 질문 → 분석 → 키워드 확인 → [다시 선택 시 재분석 후 자동 진행] →
+논문 수 선택 → arXiv 검색 → PDF 다운로드 → 텍스트 추출 → 청킹 → 임베딩 →
 ChromaDB 저장 → 의미 기반 검색 → 요약 및 답변
 """
 
@@ -56,35 +57,25 @@ def get_pdf_pipeline():
         try:
             logger.info("[INIT] PDF 임베딩 파이프라인 초기화 중...")
             
-            # Step 1: 임베딩 모델 초기화
-            # distiluse-base-multilingual-cased-v2는 한국어를 포함한 여러 언어를 지원합니다
-            # 모델 크기는 약 100MB이고, 처음 로드 시 Hugging Face에서 다운로드됩니다
             embedding_model = SentenceTransformerEmbedding(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-            # model_name="sentence-transformers/all-MiniLM-L6-v2"  # 약 80MB, 더 빠름
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
             )
-            #model_name="sentence-transformers/distiluse-base-multilingual-cased-v2" #영어 전용 모델
-
-
-            # Step 2: ChromaDB 벡터 스토어 초기화
-            # 이것은 당신의 vectorstore.py에 정의된 ArxivPaperVectorStore입니다
+            
             vectorstore = ArxivPaperVectorStore(
                 persist_directory="./data/arxiv_chunks",
                 collection_name="arxiv_chunks"
             )
             
-            # Step 3: PDF 처리 파이프라인 생성
-            # 이 파이프라인은 PDF 다운로드부터 임베딩까지 모든 과정을 관리합니다
             _pdf_pipeline = PDFEmbeddingPipeline(
                 embedding_model=embedding_model,
                 vectorstore=vectorstore,
-                chunk_chars=1800,      # 각 청크의 대략적인 문자 수 (약 450 토큰)
-                overlap_chars=350,     # 청크 간 오버래프 (문맥 손실 방지)
-                batch_size=32          # 한 번에 임베딩할 청크 수
+                chunk_chars=1800,
+                overlap_chars=350,
+                batch_size=32
             )
             
             logger.info("✓ PDF 임베딩 파이프라인 초기화 완료")
-            logger.info(f"  - 임베딩 모델: distiluse-base-multilingual-cased-v2")
+            logger.info(f"  - 임베딩 모델: all-MiniLM-L6-v2")
             logger.info(f"  - 벡터 저장소: ChromaDB")
             logger.info(f"  - 청크 크기: 1800 문자 (~450 토큰)")
         
@@ -172,14 +163,20 @@ def analyze_question_node(state: AgentState) -> dict:
     """
     사용자 질문을 분석하여 핵심 키워드를 추출합니다.
     
-    이 노드는 LLM을 사용하여 사용자의 자연어 질문을 파싱하고,
-    arXiv 검색에 사용할 수 있는 구조화된 정보로 변환합니다.
+    재분석 모드(is_reanalyzing=True)일 경우:
+    - 키워드 추출 후 자동으로 confirmed 처리
+    - 사용자에게 재확인을 요청하지 않음
+    
+    일반 모드(is_reanalyzing=False)일 경우:
+    - 키워드 추출 후 사용자에게 확인 요청
     """
     
     user_question = state.get("user_question", "")
+    is_reanalyzing = state.get("is_reanalyzing", False)
     
     logger.info("="*60)
     logger.info("[ANALYZE_QUESTION] 질문 분석 시작")
+    logger.info(f"  재분석 모드: {is_reanalyzing}")
     logger.info("="*60)
     logger.info(f"분석 대상: {user_question[:50]}...")
     
@@ -217,26 +214,43 @@ def analyze_question_node(state: AgentState) -> dict:
         logger.info(f"  질문 의도: {intent}")
         logger.info(f"  연구 도메인: {domain}")
         
-        observation_content = f"질문 분석 완료:\n- 추출된 키워드: {keywords}\n- 질문 의도: {intent}\n- 연구 도메인: {domain}"
+        # 재분석 모드인지에 따라 다른 메시지 작성
+        if is_reanalyzing:
+            observation_content = f"""질문 재분석 완료:
+- 새로운 키워드: {', '.join(keywords)}
+- 질문 의도: {intent}
+- 연구 도메인: {domain}
+
+키워드가 자동으로 확인되어 논문 검색 단계로 진행합니다."""
+            logger.info("  → 재분석 완료: 자동 승인 후 다음 단계로 진행")
+        else:
+            observation_content = f"""질문 분석 완료:
+- 추출된 키워드: {', '.join(keywords)}
+- 질문 의도: {intent}
+- 연구 도메인: {domain}"""
         
         new_step = ReActStep(
             step_type="observation",
             content=observation_content
         )
         
+        # 중요: 재분석 플래그를 초기화하고, 재분석 모드였다면 자동으로 confirmed 처리
         return {
             "extracted_keywords": keywords,
             "question_intent": intent,
             "question_domain": domain,
+            "is_reanalyzing": False,  # 플래그 초기화 (다음 번을 위해)
+            "keyword_confirmation_response": "confirmed" if is_reanalyzing else None,  # 재분석이면 자동 승인
             "react_steps": [new_step]
         }
         
     except Exception as e:
         logger.error(f"질문 분석 중 오류: {str(e)}", exc_info=True)
         return {
-            "extracted_keywords": ["research"],  # 기본 키워드
+            "extracted_keywords": ["research"],
             "question_intent": "general research",
             "question_domain": "computer science",
+            "is_reanalyzing": False,
             "error_message": str(e),
             "react_steps": [ReActStep(step_type="observation", content=f"분석 실패, 기본값 사용: {str(e)}")]
         }
@@ -302,8 +316,8 @@ def process_keyword_confirmation_response_node(state: AgentState) -> dict:
     """
     사용자의 키워드 확인 응답을 처리합니다.
     
-    - "다시" → 질문 분석 단계로 돌아감
-    - 그 외 ("확인" 등) → 논문 수 선택 단계로 진행
+    - "다시" → is_reanalyzing=True 설정, 질문 분석 단계로 돌아감
+    - 그 외 ("확인" 등) → is_reanalyzing=False, 논문 수 선택 단계로 진행
     """
     
     user_response = state.get("user_response", "").strip().lower()
@@ -313,9 +327,9 @@ def process_keyword_confirmation_response_node(state: AgentState) -> dict:
     
     # "다시" 응답 확인
     if user_response in ["다시", "retry", "다시하기", "수정", "다시해", "reanalyze"]:
-        logger.info("  → '다시' 선택: 질문 분석 단계로 이동")
+        logger.info("  → '다시' 선택: 재분석 모드 활성화")
         
-        observation_content = "사용자가 키워드 재분석을 요청했습니다. 질문 분석 단계로 돌아갑니다."
+        observation_content = "사용자가 키워드 재분석을 요청했습니다. 질문을 다시 분석한 후 자동으로 다음 단계로 진행합니다."
         
         new_step = ReActStep(
             step_type="observation",
@@ -324,6 +338,7 @@ def process_keyword_confirmation_response_node(state: AgentState) -> dict:
         
         return {
             "keyword_confirmation_response": "retry",
+            "is_reanalyzing": True,  # 핵심: 재분석 모드 활성화
             "waiting_for": None,
             "waiting_for_user": False,
             "interrupt_data": None,
@@ -343,6 +358,7 @@ def process_keyword_confirmation_response_node(state: AgentState) -> dict:
     
     return {
         "keyword_confirmation_response": "confirmed",
+        "is_reanalyzing": False,  # 일반 모드
         "waiting_for": None,
         "waiting_for_user": False,
         "interrupt_data": None,
@@ -454,8 +470,6 @@ def search_papers_node(state: AgentState) -> dict:
     """
     arXiv에서 논문을 검색한 후 PDF 임베딩 파이프라인을 실행합니다.
     
-    이 노드가 당신의 시스템에서 가장 복잡하고 시간이 많이 걸리는 부분입니다.
-    
     실행 단계:
     1. arXiv API를 사용하여 논문 검색
     2. 각 논문의 PDF를 다운로드
@@ -463,9 +477,6 @@ def search_papers_node(state: AgentState) -> dict:
     4. 텍스트를 청크로 분할 (약 450 토큰씩)
     5. 각 청크를 Sentence Transformers로 임베딩
     6. 임베딩된 청크를 ChromaDB에 저장
-    
-    이러한 저장된 청크들은 나중에 evaluate_relevance_node에서
-    사용자의 질문과 의미론적으로 유사한 부분을 찾는 데 사용됩니다.
     """
     
     keywords = state.get("extracted_keywords", [])
@@ -535,7 +546,6 @@ def search_papers_node(state: AgentState) -> dict:
         
         papers_for_pipeline = []
         for paper in papers:
-            # paper 객체의 속성을 딕셔너리로 변환
             arxiv_id = paper.url.split('/')[-1] if hasattr(paper, 'url') and paper.url else 'unknown'
             
             paper_dict = {
@@ -557,7 +567,7 @@ def search_papers_node(state: AgentState) -> dict:
         
         batch_result = pipeline.process_papers_batch(
             papers=papers_for_pipeline,
-            max_pages=10  # 각 논문에서 최대 10페이지만 처리
+            max_pages=10
         )
         
         logger.info(f"✓ PDF 처리 완료")
@@ -572,7 +582,6 @@ def search_papers_node(state: AgentState) -> dict:
         logger.info(f"  - 저장된 청크: {total_chunks_saved}개")
         logger.info(f"  - 처리 시간: {batch_result['time']:.1f}초")
         
-        # 처리 결과 요약
         observation_content = f"""검색 및 PDF 처리 완료:
 
 검색 결과:
@@ -633,11 +642,7 @@ def evaluate_relevance_node(state: AgentState) -> dict:
     ChromaDB에 저장된 청크들 중에서 사용자의 질문과
     의미론적으로 가장 유사한 청크들을 검색합니다.
     
-    이 노드의 핵심은 코사인 유사도 계산입니다.
-    사용자의 질문을 벡터로 변환한 후, 저장된 모든 청크 벡터와 비교합니다.
-    가장 높은 유사도를 가진 청크들이 반환됩니다.
-    
-    이러한 청크 기반 검색은 논문 초록만 보는 것보다 훨씬 정밀합니다.
+    코사인 유사도 계산을 통해 가장 관련성 높은 청크들을 반환합니다.
     """
     
     user_question = state.get("user_question", "")
@@ -681,7 +686,6 @@ def evaluate_relevance_node(state: AgentState) -> dict:
         }
     
     try:
-        # PDF 파이프라인에서 벡터스토어 접근
         logger.info("\nPDF 파이프라인에서 벡터스토어 접근...")
         
         pipeline = get_pdf_pipeline()
@@ -706,7 +710,7 @@ def evaluate_relevance_node(state: AgentState) -> dict:
             include=["documents", "metadatas", "distances"]
         )
         
-        logger.info(f"✓ 검색 완료: {len(search_results['ids'][0]) if search_results['ids'] else 0}개 청크 발견")
+        logger.info(f"✓ 검색 완료: {len(search_results['ids'][0]) if search_results['ids'] else 0}개 결과")
         
         # Step 3: 검색 결과 처리
         logger.info("\nStep 3: 검색 결과 처리...")
@@ -716,7 +720,7 @@ def evaluate_relevance_node(state: AgentState) -> dict:
         if search_results['ids'] and len(search_results['ids']) > 0:
             for i, chunk_id in enumerate(search_results['ids'][0]):
                 distance = search_results['distances'][0][i]
-                similarity_score = 1 - distance  # 거리를 유사도로 변환
+                similarity_score = 1 - distance
                 
                 metadata = search_results['metadatas'][0][i] if search_results['metadatas'] else {}
                 chunk_content = search_results['documents'][0][i] if search_results['documents'] else ''
@@ -736,12 +740,11 @@ def evaluate_relevance_node(state: AgentState) -> dict:
                 
                 relevant_chunks.append(chunk_info)
                 
-                if i < 3:  # 상위 3개만 로깅
+                if i < 3:
                     logger.debug(f"  청크 {i+1}: 유사도 {similarity_score:.4f}")
         
         logger.info(f"✓ {len(relevant_chunks)}개 청크 처리 완료")
         
-        # 상위 청크 정보로 관찰 작성
         observation_parts = [f"의미 기반 검색 완료: {len(relevant_chunks)}개 청크 발견"]
         observation_parts.append("\n가장 관련성 높은 상위 3개 청크:")
         
@@ -826,9 +829,6 @@ SUMMARIZE_PROMPT = """
 def summarize_papers_node(state: AgentState) -> dict:
     """
     관련 청크들이 속한 논문들의 요약을 생성합니다.
-    
-    청크 기반 검색에서 반환된 관련 청크들로부터
-    논문 정보를 추출하고, 각 논문의 초록을 요약합니다.
     """
     
     relevant_chunks = state.get("relevant_chunks", [])
@@ -858,23 +858,21 @@ def summarize_papers_node(state: AgentState) -> dict:
             content=f"관련 논문들의 요약을 생성합니다."
         )
         
-        # 관련 청크에서 논문 정보 추출
         seen_papers = {}
-        for chunk in relevant_chunks[:10]:  # 최대 10개 청크 처리
+        for chunk in relevant_chunks[:10]:
             arxiv_id = chunk.get('arxiv_id')
             if arxiv_id and arxiv_id not in seen_papers:
                 seen_papers[arxiv_id] = {
                     'title': chunk.get('title', ''),
-                    'abstract': chunk.get('content', ''),  # 청크 내용을 요약 대상으로
+                    'abstract': chunk.get('content', ''),
                     'authors': chunk.get('authors', ''),
                 }
         
         logger.info(f"추출된 논문: {len(seen_papers)}개")
         
-        # 각 논문 요약 생성
         summary_parts = []
         
-        for arxiv_id, paper_info in list(seen_papers.items())[:5]:  # 최대 5개 요약
+        for arxiv_id, paper_info in list(seen_papers.items())[:5]:
             try:
                 if paper_info['title']:
                     prompt = SUMMARIZE_PROMPT.format(
@@ -945,8 +943,6 @@ FINAL_RESPONSE_PROMPT = """
 def generate_response_node(state: AgentState) -> dict:
     """
     검색 결과와 요약을 바탕으로 최종 답변을 생성합니다.
-    
-    이것이 사용자에게 보여질 최종 결과입니다.
     """
     
     user_question = state.get("user_question", "")
@@ -987,7 +983,6 @@ def generate_response_node(state: AgentState) -> dict:
     try:
         llm = get_llm()
         
-        # 관련 청크 정보 정리
         papers_info = ""
         for i, chunk in enumerate(relevant_chunks[:5], 1):
             papers_info += f"\n\n{i}. {chunk['title']}\n"
