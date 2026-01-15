@@ -1,17 +1,18 @@
 # app/graph/workflow.py
 # -*- coding: utf-8 -*-
 """
-완전히 수정된 LangGraph 워크플로우 (재분석 모드 지원)
+완전히 수정된 LangGraph 워크플로우 (재분석 모드 지원 - 단순화 버전)
 ================================================================================
 
 핵심 수정사항:
-- analyze_question 노드 다음에 조건부 엣지 추가
-- is_reanalyzing 플래그를 사용하여 재분석 시 키워드 확인 건너뛰기
-- "다시" 선택 → 재분석 → 자동 승인 → 논문 수 선택으로 진행
+- "다시" 선택 시 재분석 후 다시 키워드 확인을 거침
+- 무한 루프 방지: 재분석은 되지만 항상 사용자 확인 필요
+- 사용자 경험 개선: 새로운 키워드를 항상 확인할 수 있음
 
 파이프라인 흐름:
-사용자 질문 → 키워드 추출 → [사용자 확인 or 재분석 시 자동 승인] →
-[논문 수 선택] → arXiv 검색 → PDF 처리 → 의미 검색 → 답변 생성
+사용자 질문 → 키워드 추출 → [사용자 확인] →
+["다시" 선택 시 → 재분석 → 다시 키워드 확인] →
+["확인" 선택 시 → 논문 수 선택] → arXiv 검색 → PDF 처리 → 의미 검색 → 답변 생성
 """
 
 from typing import Literal
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================
-# 워크플로우 빌드 (수정된 버전)
+# 워크플로우 빌드 (단순화된 버전)
 # ============================================
 
 def build_research_workflow() -> StateGraph:
@@ -45,8 +46,9 @@ def build_research_workflow() -> StateGraph:
     재분석 모드를 지원하는 워크플로우를 구축합니다.
     
     핵심 변경사항:
-    1. analyze_question 다음에 조건부 엣지 추가
-    2. 재분석 모드일 때는 키워드 확인을 건너뛰고 바로 논문 수 선택으로 이동
+    1. 재분석 후에도 항상 키워드 확인을 거침
+    2. route_after_analyze 함수 단순화
+    3. 사용자는 항상 새로운 키워드를 확인할 수 있음
     
     워크플로우 구조:
     
@@ -56,19 +58,17 @@ def build_research_workflow() -> StateGraph:
       ↓
     analyze_question
       ↓
-    [조건부 분기 NEW!] ← keyword_confirmation_response 확인
-    ├─ request_keyword_confirmation (일반 모드)
-    └─ request_paper_count (재분석 완료 후 자동 진행)
+    request_keyword_confirmation (항상 이 단계를 거침)
       ↓
-    [INTERRUPT 1] request_keyword_confirmation
+    [INTERRUPT 1] 
       ↓
     process_keyword_confirmation_response
       ↓
     [조건부 분기]
-    ├─ analyze_question (사용자가 '다시' 선택)
+    ├─ analyze_question (사용자가 '다시' 선택 → 재분석 → 다시 확인)
     └─ request_paper_count (사용자가 '확인' 선택)
       ↓
-    [INTERRUPT 2] request_paper_count
+    [INTERRUPT 2] 
       ↓
     process_paper_count_response
       ↓
@@ -105,40 +105,8 @@ def build_research_workflow() -> StateGraph:
     # 초기 처리 흐름
     workflow.add_edge("receive_question", "analyze_question")
     
-    # 핵심 수정: analyze_question 다음을 조건부로 만듦
-    def route_after_analyze(state: AgentState) -> Literal["request_keyword_confirmation", "request_paper_count"]:
-        """
-        질문 분석 후 경로를 결정합니다.
-        
-        analyze_question_node에서 재분석 모드였다면 keyword_confirmation_response를
-        "confirmed"로 설정했습니다. 이 경우 키워드 확인을 건너뛰고 바로 논문 수 선택으로 갑니다.
-        
-        일반 모드라면 사용자에게 키워드 확인을 요청합니다.
-        """
-        keyword_response = state.get("keyword_confirmation_response")
-        
-        logger.info("=" * 60)
-        logger.info("[ROUTE_AFTER_ANALYZE] 경로 결정")
-        logger.info(f"  keyword_confirmation_response: {keyword_response}")
-        logger.info("=" * 60)
-        
-        if keyword_response == "confirmed":
-            # 재분석 모드였음 - 자동 승인되었으므로 논문 수 선택으로 직행
-            logger.info("  → 재분석 완료: request_paper_count로 직행")
-            return "request_paper_count"
-        else:
-            # 일반 모드 - 사용자 확인 필요
-            logger.info("  → 일반 모드: request_keyword_confirmation으로 이동")
-            return "request_keyword_confirmation"
-    
-    workflow.add_conditional_edges(
-        "analyze_question",
-        route_after_analyze,
-        {
-            "request_keyword_confirmation": "request_keyword_confirmation",
-            "request_paper_count": "request_paper_count"
-        }
-    )
+    # 🔑 핵심 단순화: 항상 키워드 확인으로 이동
+    workflow.add_edge("analyze_question", "request_keyword_confirmation")
     
     # 키워드 확인 흐름
     workflow.add_edge("request_keyword_confirmation", "process_keyword_confirmation_response")
@@ -230,7 +198,7 @@ def create_research_agent(checkpointer=None):
         ]
     )
     
-    logger.info("✓ 워크플로우 컴파일 완료 (재분석 모드 지원)")
+    logger.info("✓ 워크플로우 컴파일 완료 (재분석 모드 지원 - 단순화 버전)")
     return compiled
 
 
@@ -244,9 +212,9 @@ class ResearchAssistant:
     
     전체 처리 흐름:
     1. 사용자 질문 수신
-    2. 키워드 추출 및 사용자 확인 (다시 선택 가능)
-    3. "다시" 선택 시: 재분석 후 자동으로 다음 단계로 진행
-    4. 논문 수 선택
+    2. 키워드 추출 및 사용자 확인
+    3. "다시" 선택 시: 재분석 → 다시 키워드 확인
+    4. "확인" 선택 시: 논문 수 선택
     5. arXiv 검색 및 PDF 처리
     6. 의미 기반 청크 검색
     7. 요약 및 답변 생성
@@ -404,15 +372,26 @@ class ResearchAssistant:
                 }
             
             if current_values.get("interrupt_data"):
-                self.interrupt_count += 1
+                # 🔑 수정: "다시" 선택 시 interrupt_count를 증가시키지 않음
+                # 재분석 후 다시 키워드 확인(Stage 1)으로 돌아가므로
                 interrupt_data = current_values["interrupt_data"]
-                logger.info(f"[CONTINUE MODE] → 다음 Interrupt: Stage {self.interrupt_count}")
+                
+                # 현재 어떤 interrupt인지 확인
+                if interrupt_data.interrupt_type == "confirm_keywords":
+                    # 키워드 확인 단계 (재분석 후 돌아온 경우)
+                    self.interrupt_count = 1
+                    logger.info(f"[CONTINUE MODE] → 키워드 재확인: Stage {self.interrupt_count}")
+                elif interrupt_data.interrupt_type == "select_paper_count":
+                    # 논문 수 선택 단계
+                    self.interrupt_count = 2
+                    logger.info(f"[CONTINUE MODE] → 논문 수 선택: Stage {self.interrupt_count}")
                 
                 return {
                     "status": "waiting_for_input",
                     "interrupt_stage": self.interrupt_count,
                     "message": interrupt_data.message,
                     "options": interrupt_data.options,
+                    "keywords": current_values.get("extracted_keywords", []),  # 🔑 추가: 새 키워드 전달
                     "thread_id": self.current_thread_id
                 }
             
