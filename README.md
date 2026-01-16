@@ -114,24 +114,36 @@ cd AI-hackathon-ARA
 #### Step 2: 가상 환경 생성
 **Windows:**
 Remove-Item -Recurse -Force venv
+
 python -m venv venv
+
 .\venv\Scripts\Activate.ps1
+
 pip install --upgrade pip
+
 pip install -r requirements.txt
 
 **Mac:**
 rm -rf venv
 python3 -m venv venv
+
 source venv/bin/activate
+
 pip install --upgrade pip
+
 pip install -r requirements.txt
 
 **Linux:**
 rm -rf venv
+
 python3 -m venv venv
+
 source venv/bin/activate
+
 pip install --upgrade pip
+
 pip install -r requirements.txt
+
 (venv)가 터미널에 보이면 성공
 
 
