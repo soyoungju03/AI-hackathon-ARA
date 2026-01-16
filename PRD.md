@@ -1,644 +1,686 @@
-# AI Research Assistant PRD (Product Requirements Document)
+# PRD: AI Research Assistant (ARA)
 
-**버전**: 2.0  
-**작성일**: 2026-01-11  
-**작성자**: 주소영
-
----
-
-## 1. 프로젝트 개요
-
-### 1.1 프로젝트명
-**[ARA] AI Research Assistant** - 학술 논문 기반 지능형 연구 도우미
-
-### 1.2 배경 및 목적
-
-#### 배경
-- 학술 논문 사이트(국내/해외)가 분산되어 있어 원하는 자료를 찾기 어려움
-- 논문을 찾고 이해하는 데 많은 시간이 소요됨
-- 대학생, 연구자, 기술직 현업자들이 공통으로 겪는 문제
-
-#### 목적
-사용자의 전공 및 기술 관련 질문을 분석하여, 국내외 다양한 학술 오픈소스에서 관련 논문을 검색하고, AI가 핵심 내용을 요약 정리하여 제공하는 지능형 연구 도우미 시스템 구축
-
-### 1.3 핵심 목표
-1. **정확한 질문 분석**: ReAct 패턴을 통한 질문 의도 파악 및 핵심 키워드 추출
-2. **다양한 논문 소스 지원**: arXiv 외 국내외 다양한 학술 DB 연동
-3. **Human-in-the-Loop**: 사용자 개입을 통한 검색 논문 수 결정 및 품질 향상
-4. **높은 연관성**: 사용자 질문과 높은 연관성을 가진 논문만 선별
-5. **지속적 대화 지원**: Short-term/Long-term Memory를 통한 맥락 유지
+**문서 버전**: 2.3
+**최종 업데이트**: 2026년 1월 15일
+**프로젝트 상태**: ✅ 완료 및 배포 준비됨
 
 ---
 
-## 2. 시스템 아키텍처
+## 📋 Executive Summary
 
-### 2.1 전체 아키텍처 다이어그램
+### 프로젝트명
+**AI Research Assistant (ARA)** - 인공지능 기반 학술 논문 검색 및 분석 시스템
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              사용자 인터페이스                                 │
-│                    (FastAPI + Gradio / React Frontend)                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           LangGraph Orchestrator                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                        ReAct Agent Loop                              │   │
-│  │   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐        │   │
-│  │   │ Thought  │ → │  Action  │ → │Observation│ → │ Decision │        │   │
-│  │   │ (분석)   │   │ (실행)   │   │ (관찰)   │   │ (결정)   │        │   │
-│  │   └──────────┘   └──────────┘   └──────────┘   └──────────┘        │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                      │                                       │
-│  ┌───────────────────────────────────┼───────────────────────────────────┐  │
-│  │              Human-in-the-Loop (Interrupt)                            │  │
-│  │  • 검색할 논문 수 결정                                                  │  │
-│  │  • 검색 결과 확인 및 선택                                               │  │
-│  │  • 추가 검색 여부 결정                                                  │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    ▼                 ▼                 ▼
-┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
-│   Tool: 논문 검색    │  │  Tool: 웹 검색      │  │  Tool: 요약 생성    │
-│  ┌───────────────┐  │  │  (Tavily/Serper)    │  │  (LLM Summary)      │
-│  │ arXiv API     │  │  └─────────────────────┘  └─────────────────────┘
-│  │ Semantic S.   │  │
-│  │ PubMed        │  │
-│  │ CORE          │  │
-│  │ DOAJ          │  │
-│  │ DBpia(한국)   │  │
-│  │ RISS(한국)    │  │
-│  └───────────────┘  │
-└─────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              RAG Pipeline                                    │
-│  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐  │
-│  │   Document Loader   │ →│   Text Splitter     │ →│   Embedding Model   │  │
-│  │   (PDF, Abstract)   │  │   (Chunk 생성)      │  │   (all-MiniLM-L6)  │  │
-│  └─────────────────────┘  └─────────────────────┘  └─────────────────────┘  │
-│                                      │                                       │
-│                                      ▼                                       │
-│                          ┌─────────────────────┐                            │
-│                          │   Vector Database   │                            │
-│                          │     (Weaviate)      │                            │
-│                          └─────────────────────┘                            │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Memory System                                   │
-│  ┌────────────────────────────┐  ┌────────────────────────────────────────┐ │
-│  │    Short-term Memory       │  │         Long-term Memory                │ │
-│  │  • 현재 세션 대화 내용      │  │  • 과거 질문/응답 히스토리              │ │
-│  │  • 임시 검색 결과          │  │  • 사용자 관심 주제                     │ │
-│  │  • 진행 중인 분석 상태      │  │  • 자주 검색하는 키워드                 │ │
-│  │  (In-Memory / Redis)       │  │  (PostgreSQL / Weaviate)               │ │
-│  └────────────────────────────┘  └────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+### 핵심 문제 정의
+학술 연구를 수행하는 사용자들은 다음과 같은 문제를 마주합니다:
+- 📚 **방대한 논문량**: arXiv에 매일 수천 개의 새로운 논문이 업로드됨
+- ⏱️ **시간 낭비**: 관련 논문 검색과 문헌 조사에 수십 시간 소요
+- 🔍 **저품질 검색**: 단순 키워드 검색으로는 의미론적으로 유사한 논문을 찾기 어려움
+- 📖 **수동 분석**: 찾은 논문들을 수동으로 읽고 분석해야 함
 
-### 2.2 워크플로우 (LangGraph State Machine)
+### 해결책
+**AI Research Assistant**는 자연스러운 언어 질문을 통해 관련 논문을 자동으로 검색하고, PDF를 처리하여, 사용자의 질문에 정확히 답하는 AI 기반 솔루션입니다.
 
-```
-                                    START
-                                      │
-                                      ▼
-                         ┌────────────────────────┐
-                         │   1. 질문 수신 노드     │
-                         │   (receive_question)   │
-                         └────────────────────────┘
-                                      │
-                                      ▼
-                         ┌────────────────────────┐
-                         │   2. 질문 분석 노드     │
-                         │   (analyze_question)   │
-                         │   - ReAct: Thought     │
-                         └────────────────────────┘
-                                      │
-                                      ▼
-                         ┌────────────────────────┐
-                         │  3. 키워드 추출 노드    │
-                         │  (extract_keywords)    │
-                         └────────────────────────┘
-                                      │
-                                      ▼
-                    ┌─────────────────────────────────────┐
-                    │   4. 사용자 확인 노드 (INTERRUPT)    │
-                    │   - 추출된 키워드 확인               │
-                    │   - 검색할 논문 수 선택              │
-                    │   - 검색 소스 선택                   │
-                    └─────────────────────────────────────┘
-                                      │
-                                      ▼
-                         ┌────────────────────────┐
-                         │   5. 논문 검색 노드     │
-                         │   (search_papers)      │
-                         │   - ReAct: Action      │
-                         └────────────────────────┘
-                                      │
-                                      ▼
-                         ┌────────────────────────┐
-                         │   6. 연관성 평가 노드   │
-                         │   (evaluate_relevance) │
-                         │   - ReAct: Observation │
-                         └────────────────────────┘
-                                      │
-                                      ▼
-                    ┌─────────────────────────────────────┐
-                    │   7. 결과 확인 노드 (INTERRUPT)     │
-                    │   - 검색 결과 미리보기               │
-                    │   - 추가 검색 또는 진행 선택         │
-                    └─────────────────────────────────────┘
-                                      │
-                         ┌────────────┴────────────┐
-                         ▼                         ▼
-              (추가 검색 필요)              (진행)
-                   │                              │
-                   ▼                              ▼
-          [5. 논문 검색으로]        ┌────────────────────────┐
-                                   │   8. 논문 요약 노드     │
-                                   │   (summarize_papers)   │
-                                   └────────────────────────┘
-                                              │
-                                              ▼
-                                   ┌────────────────────────┐
-                                   │   9. 응답 생성 노드     │
-                                   │   (generate_response)  │
-                                   │   - ReAct: Decision    │
-                                   └────────────────────────┘
-                                              │
-                                              ▼
-                                   ┌────────────────────────┐
-                                   │  10. 메모리 저장 노드   │
-                                   │   (save_to_memory)     │
-                                   └────────────────────────┘
-                                              │
-                                              ▼
-                                            END
-```
-
----
-
-## 3. 상세 기능 명세
-
-### 3.1 질문 분석 및 키워드 추출
-
-| 항목 | 설명 |
+### 핵심 가치 제안
+| 가치 | 설명 |
 |------|------|
-| 기능명 | Question Analysis & Keyword Extraction |
-| 입력 | 사용자의 자연어 질문 |
-| 출력 | 핵심 키워드 리스트 (2-5개), 질문 의도 분류 |
-| 처리 방식 | LLM + Function Calling |
-| ReAct 단계 | Thought |
+| **⏱️ 효율성** | 문헌 조사 시간 80% 단축 |
+| **🎯 정확성** | 의미 기반 검색으로 90%+ 관련성 |
+| **🤖 자동화** | PDF 다운로드부터 분석까지 자동 처리 |
+| **👤 제어성** | Human-in-the-Loop으로 사용자 개입 가능 |
+| **📊 투명성** | ReAct 패턴으로 AI의 사고 과정 공개 |
 
-**Function Calling 스키마**:
-```json
-{
-  "name": "analyze_question",
-  "parameters": {
-    "keywords": ["string"],
-    "intent": "string",
-    "domain": "string",
-    "complexity": "simple|moderate|complex"
-  }
-}
+---
+
+## 🎯 목표 및 성공 기준
+
+### Primary Goals
+
+1. **사용 편의성 극대화**
+   - 자연어로 질문 입력 가능
+   - 3단계의 간단한 대화형 인터페이스
+   - ✅ **성공 기준**: 사용자가 5분 이내에 첫 결과 획득
+
+2. **검색 정확도 극대화**
+   - 의미 기반 검색으로 키워드 검색 능가
+   - 사용자 피드백 반영 (재분석 기능)
+   - ✅ **성공 기준**: 관련성 점수 0.7 이상
+
+3. **자동화 극대화**
+   - PDF 다운로드부터 분석까지 완전 자동화
+   - 병렬 처리로 성능 최적화
+   - ✅ **성공 기준**: 3개 논문 처리 120초 이내
+
+4. **안정성 확보**
+   - 오류 처리 및 자동 재시도
+   - 네트워크 장애 시 graceful degradation
+   - ✅ **성공 기준**: 99% 가용성
+
+### Secondary Goals
+
+- 다양한 연구 분야 지원
+- 여러 언어 지원 (향후)
+- 모바일 인터페이스 (향후)
+
+---
+
+## 📊 사용자 요구사항 (User Requirements)
+
+### User Persona 1: 대학원생 (Graduate Student)
+**특성:**
+- 매주 수십 개의 논문을 검토해야 함
+- 시간이 부족함
+- 최신 연구 동향을 빠르게 파악해야 함
+
+**요구사항:**
+- 빠른 문헌 검색
+- 자동 요약 기능
+- 한국어 지원
+- 모바일 접근성
+
+**성공 지표:**
+- 사용 만족도 4.5/5 이상
+- 주 3회 이상 사용
+- 추천 의향 80% 이상
+
+### User Persona 2: 연구원 (Researcher)
+**특성:**
+- 특정 분야의 깊이 있는 연구
+- 높은 정확도 요구
+- 논문 간 비교 분석 필요
+
+**요구사항:**
+- 고정밀 의미 기반 검색
+- 다중 논문 비교
+- 상세한 분석 결과
+- API 지원
+
+**성공 지표:**
+- 검색 정확도 90% 이상
+- 논문당 처리 시간 < 30초
+- 고급 기능 활용도 60% 이상
+
+### User Persona 3: R&D 팀 (Industry)
+**특성:**
+- 경쟁 기술 조사 필요
+- 빠른 의사결정 요구
+- 보안 및 프라이버시 중요
+
+**요구사항:**
+- 대량 처리 (50+ 논문)
+- 팀 협업 기능
+- 엔터프라이즈 배포
+- 데이터 보안
+
+**성공 지표:**
+- 배치 처리 성능 50개/시간
+- 팀 기능 채택률 70%
+- 보안 인증 획득
+
+---
+
+## 🏗️ 기술 요구사항 (Technical Requirements)
+
+### Functional Requirements (기능 요구사항)
+
+#### FR1: 질문 입력 및 분석
+```
+FR1.1: 사용자가 자연언어 질문 입력 가능
+FR1.2: AI가 질문을 자동으로 분석하여 키워드 추출
+FR1.3: 추출된 키워드를 사용자에게 제시
+FR1.4: 사용자가 키워드 확인 또는 재분석 선택 가능
 ```
 
-### 3.2 Human-in-the-Loop (Interrupt)
+#### FR2: 논문 검색
+```
+FR2.1: arXiv API를 사용한 논문 검색
+FR2.2: 1-10개 범위의 논문 개수 선택
+FR2.3: 카테고리별 필터링
+FR2.4: 발표 날짜 기반 정렬
+```
 
-| 항목 | 설명 |
-|------|------|
-| 기능명 | User Confirmation Interrupt |
-| 트리거 | 키워드 추출 완료 후 / 검색 결과 확인 시 |
-| 사용자 선택 | 논문 수 (1-10), 검색 소스 선택, 진행/수정 |
+#### FR3: PDF 처리
+```
+FR3.1: 논문 PDF 자동 다운로드
+FR3.2: 텍스트 추출 (pdfplumber)
+FR3.3: 텍스트 청킹 (1800자, 350자 오버랩)
+FR3.4: 병렬 처리 (최대 5개 동시)
+FR3.5: 오류 처리 및 자동 재시도
+```
 
-**Interrupt State**:
+#### FR4: 의미 기반 검색
+```
+FR4.1: Sentence Transformers로 임베딩 생성
+FR4.2: ChromaDB에 청크 저장
+FR4.3: 질문과의 유사도 계산 (코사인)
+FR4.4: 상위 청크 반환
+FR4.5: 유사도 점수 함께 제시
+```
+
+#### FR5: 답변 생성
+```
+FR5.1: 검색된 청크 기반 요약 생성
+FR5.2: GPT-4o를 사용한 최종 답변 생성
+FR5.3: 인용 문헌 포함
+FR5.4: 추가 학습 제안 포함
+```
+
+### Non-Functional Requirements (비기능 요구사항)
+
+#### Performance Requirements
+```
+NF1.1: 응답 시간 < 5분 (3개 논문 기준)
+NF1.2: 임베딩 생성 < 5초
+NF1.3: 검색 쿼리 < 2초
+NF1.4: 답변 생성 < 15초
+NF1.5: 처리량 > 10개 사용자 동시 처리
+```
+
+#### Reliability Requirements
+```
+NF2.1: 가용성 > 99%
+NF2.2: 재시도 최대 3회
+NF2.3: 오류 복구 자동화
+NF2.4: 로깅 및 모니터링
+```
+
+#### Scalability Requirements
+```
+NF3.1: 동시 사용자 100명 지원
+NF3.2: 일일 처리 1000개 논문
+NF3.3: 저장소 확장성 자동
+NF3.4: 캐싱 메커니즘
+```
+
+#### Security Requirements
+```
+NF4.1: API 키 환경 변수 관리
+NF4.2: HTTPS 통신
+NF4.3: 입력 검증
+NF4.4: SQL injection 방지
+NF4.5: 개인정보 최소화
+```
+
+#### Usability Requirements
+```
+NF5.1: 인터페이스 직관성 (SUS > 70)
+NF5.2: 온보딩 시간 < 5분
+NF5.3: 오류 메시지 명확성
+NF5.4: 다국어 지원 (향후)
+```
+
+---
+
+## 🏛️ 시스템 아키텍처
+
+### High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     사용자 계층                           │
+│              (Gradio 6.3.0 Web Interface)               │
+│        [대화형] [빠른 검색] [정보] [설정]               │
+└─────────────────────────────────────────────────────────┘
+                          ↕️
+┌─────────────────────────────────────────────────────────┐
+│                    애플리케이션 계층                      │
+│              (app.py - Session Management)              │
+│        세션 추적, 상태 관리, 사용자 응답 처리            │
+└─────────────────────────────────────────────────────────┘
+                          ↕️
+┌─────────────────────────────────────────────────────────┐
+│                   오케스트레이션 계층                     │
+│             (LangGraph - Workflow Control)              │
+│  ┌──────────────────────────────────────────────┐      │
+│  │ ResearchAssistant                            │      │
+│  │ - start(): 워크플로우 시작                    │      │
+│  │ - continue_with_response(): 사용자 응답 처리 │      │
+│  │ - run(): 자동 실행 모드                      │      │
+│  └──────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────┘
+                          ↕️
+┌──────────────────────────────────────────────────────────────┐
+│                    워크플로우 계층                            │
+│                  (10 Nodes + Routing)                       │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Node 1-2: 질문 입력 → 분석                          │   │
+│  │ Node 3-4: 키워드 확인 [INTERRUPT 1]                │   │
+│  │ Node 5-6: 논문 수 선택 [INTERRUPT 2]                │   │
+│  │ Node 7: arXiv 검색 + PDF 처리                       │   │
+│  │ Node 8: 의미 기반 검색 (ChromaDB)                   │   │
+│  │ Node 9: 논문 요약                                   │   │
+│  │ Node 10: 최종 답변 생성                             │   │
+│  └─────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
+                          ↕️
+┌──────────────────────────────────────────────────────────────┐
+│                    도구/서비스 계층                           │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │ LLM Services                                       │    │
+│  │ - OpenAI GPT-4o (질문 분석, 답변 생성)            │    │
+│  │ - OpenAI GPT-4 Turbo (가벼운 모델)                 │    │
+│  └────────────────────────────────────────────────────┘    │
+│                          ↓                                  │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │ Search Services                                    │    │
+│  │ - arXiv API (논문 검색)                            │    │
+│  │ - Google Scholar API (향후)                        │    │
+│  └────────────────────────────────────────────────────┘    │
+│                          ↓                                  │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │ PDF Processing Pipeline                           │    │
+│  │ - PDF 다운로드 (requests)                          │    │
+│  │ - 텍스트 추출 (pdfplumber)                         │    │
+│  │ - 청킹 (랭체인)                                    │    │
+│  │ - 임베딩 (Sentence Transformers)                   │    │
+│  │ - 병렬 처리 (concurrent.futures)                   │    │
+│  └────────────────────────────────────────────────────┘    │
+│                          ↓                                  │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │ Vector Store                                       │    │
+│  │ - ChromaDB (청크 저장)                             │    │
+│  │ - 메타데이터 관리                                  │    │
+│  │ - 코사인 유사도 검색                                │    │
+│  └────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Component Interaction Diagram
+
+```
+사용자 입력
+    ↓
+┌──────────────────────────────────┐
+│ app.py (Gradio Interface)        │
+│ - Chatbot 관리                   │
+│ - 세션 상태 추적                  │
+│ - 사용자 메시지 처리             │
+└──────────────────────────────────┘
+    ↓
+┌──────────────────────────────────┐
+│ ResearchAssistant (Orchestrator) │
+│ - start()                        │
+│ - continue_with_response()       │
+│ - run()                          │
+└──────────────────────────────────┘
+    ↓
+┌──────────────────────────────────┐
+│ LangGraph Workflow               │
+│ - 10 노드                        │
+│ - 2 interrupt 포인트             │
+│ - 조건부 라우팅                   │
+└──────────────────────────────────┘
+    ↓
+┌───────────────────────────────────────────────────────┐
+│                  도구 실행                             │
+│                                                       │
+│ ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  │
+│ │ arXiv API   │  │ PDF Pipeline │  │ ChromaDB    │  │
+│ │             │  │              │  │             │  │
+│ │ - 검색      │  │ - 다운로드   │  │ - 저장      │  │
+│ └─────────────┘  │ - 추출       │  │ - 검색      │  │
+│                  │ - 청킹       │  └─────────────┘  │
+│ ┌─────────────┐  │ - 임베딩     │                   │
+│ │ OpenAI API  │  └──────────────┘                   │
+│ │             │                                     │
+│ │ - 분석      │ ┌──────────────┐                    │
+│ │ - 생성      │ │ Embeddings   │                    │
+│ └─────────────┘  │              │                    │
+│                  │ Sentence-    │                    │
+│                  │ Transformers │                    │
+│                  └──────────────┘                    │
+└───────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔄 워크플로우 상세 명세
+
+### Workflow State Machine
+
+```
+[START]
+  ↓
+┌─ STATE 0: 초기 처리
+│  ├─ Node 1: receive_question() - 질문 수신
+│  ├─ Node 2: analyze_question() - 키워드 추출
+│  └─ Node 3: request_keyword_confirmation() - 키워드 확인 요청
+│     ⚠️ INTERRUPT 1 - 사용자 입력 대기
+│
+├─ STATE 1: 키워드 확인 응답 처리
+│  ├─ Node 4: process_keyword_confirmation_response()
+│  │
+│  ├─ IF 응답 == "다시"
+│  │  ├─ is_reanalyzing = True
+│  │  ├─ go back to Node 2 (재분석)
+│  │  └─ go back to Node 3 (재확인 요청)
+│  │     ⚠️ INTERRUPT 1 (다시)
+│  │
+│  └─ ELSE IF 응답 == "확인"
+│     └─ go to STATE 2
+│
+├─ STATE 2: 논문 수 선택
+│  ├─ Node 5: request_paper_count()
+│  │  ⚠️ INTERRUPT 2 - 사용자 입력 대기
+│  │
+│  ├─ Node 6: process_paper_count_response()
+│  │
+│  └─ Node 7: search_papers()
+│     (arXiv 검색 + PDF 처리)
+│
+├─ STATE 3: 의미 검색 및 분석
+│  ├─ IF 검색 실패
+│  │  └─ Node 10: generate_response() (오류 메시지)
+│  │
+│  └─ IF 검색 성공
+│     ├─ Node 8: evaluate_relevance() (ChromaDB 검색)
+│     ├─ Node 9: summarize_papers() (논문 요약)
+│     └─ Node 10: generate_response() (최종 답변)
+│
+└─ [END] final_response 반환
+```
+
+### Interrupt Points
+
+#### Interrupt 1: Keyword Confirmation
+```
+시점: analyze_question_node 이후
+조건: 항상
+사용자 입력 옵션:
+  - "확인" / "OK" / "" → confirmed
+  - "다시" / "수정" / "retry" → retry
+처리:
+  - confirmed: request_paper_count로 진행
+  - retry: analyze_question로 돌아가서 재분석
+```
+
+#### Interrupt 2: Paper Count Selection
+```
+시점: request_paper_count_node 이후
+조건: 항상
+사용자 입력 옵션:
+  - "1" ~ "10" (숫자)
+처리:
+  - 1-10: 해당 숫자로 처리
+  - 범위 외: 경고 후 최근접 값 사용
+  - 잘못된 입력: 기본값 3 사용
+```
+
+---
+
+## 📊 데이터 모델
+
+### State Definition
 ```python
-class InterruptState(TypedDict):
+class AgentState(TypedDict):
+    # 입력
+    user_question: str
+    session_id: str
+    
+    # 분석 결과
     extracted_keywords: List[str]
-    suggested_paper_count: int
-    available_sources: List[str]
-    user_selection: Optional[Dict]
-    should_continue: bool
+    question_intent: str
+    question_domain: str
+    
+    # 검색 설정
+    paper_count: int
+    
+    # 검색 결과
+    papers: List[Paper]
+    
+    # PDF 처리 결과
+    chunks_saved: int
+    pdf_processing_result: PDFProcessingResult
+    
+    # 청크 검색 결과
+    relevant_chunks: List[Chunk]
+    
+    # Interrupt
+    interrupt_data: InterruptData
+    keyword_confirmation_response: Literal["confirmed", "retry"]
+    
+    # 재분석 모드
+    is_reanalyzing: bool
+    
+    # 최종 결과
+    final_response: str
+    is_complete: bool
 ```
 
-### 3.3 다중 소스 논문 검색
-
-| 소스명 | 유형 | API/방식 | 특징 |
-|--------|------|----------|------|
-| arXiv | 해외 | REST API | 물리, CS, 수학 분야 |
-| Semantic Scholar | 해외 | REST API | AI 기반 연관성 분석 |
-| PubMed | 해외 | E-utilities API | 의학/생명과학 |
-| CORE | 해외 | REST API | 오픈액세스 논문 |
-| DOAJ | 해외 | REST API | 오픈액세스 저널 |
-| DBpia | 국내 | 웹 스크래핑* | 국내 학술 논문 |
-| RISS | 국내 | 웹 스크래핑* | 국내 학위논문 |
-
-*주의: 웹 스크래핑 시 이용약관 확인 필요
-
-### 3.4 연관성 평가 알고리즘
-
+### Paper Model
 ```python
-def evaluate_relevance(query: str, paper: Paper) -> float:
+class Paper(BaseModel):
+    title: str
+    authors: List[str]
+    abstract: str
+    url: str
+    published_date: str
+    source: str = "arXiv"
+    relevance_score: float
+```
+
+### Chunk Model
+```python
+class Chunk(BaseModel):
+    chunk_id: str
+    content: str
+    arxiv_id: str
+    title: str
+    section: Optional[str]
+    page_number: int
+    similarity_score: float
+    metadata: Dict[str, Any]
+```
+
+---
+
+## 🚦 리스크 및 완화 전략
+
+### 기술적 리스크
+
+| 리스크 | 확률 | 영향 | 완화 전략 |
+|--------|------|------|---------|
+| **arXiv API 다운타임** | 중 | 높음 | 캐싱, 재시도 로직, 오류 메시지 |
+| **PDF 다운로드 실패** | 중 | 중간 | 재시도, 타임아웃 설정, 오류 로깅 |
+| **메모리 부족** | 낮음 | 높음 | 스트리밍 처리, 배치 크기 제한 |
+| **OpenAI API 할당량** | 낮음 | 높음 | 비용 모니터링, 속도 제한 |
+| **벡터 DB 성능** | 낮음 | 중간 | 인덱싱, 캐싱, 쿼리 최적화 |
+
+### 운영적 리스크
+
+| 리스크 | 확률 | 영향 | 완화 전략 |
+|--------|------|------|---------|
+| **높은 API 비용** | 중 | 높음 | 경량 모델 사용, 배치 처리 |
+| **데이터 개인정보 보호** | 낮음 | 높음 | 입력 검증, 데이터 암호화 |
+| **사용자 데이터 손실** | 낮음 | 높음 | 정기 백업, 분산 저장소 |
+| **보안 취약점** | 낮음 | 높음 | 코드 리뷰, 보안 감사 |
+
+---
+
+## 📈 성공 지표 (Success Metrics)
+
+### Quantitative Metrics
+
+| 지표 | 목표 | 측정 방법 |
+|------|------|---------|
+| **응답 시간** | < 5분 | 로그 분석 |
+| **관련성 점수** | > 0.7 | 사용자 평가 |
+| **가용성** | > 99% | 모니터링 대시보드 |
+| **사용자 수** | > 100/월 | 접근 로그 |
+| **오류율** | < 2% | 에러 로그 |
+| **재시도율** | < 10% | 세션 로그 |
+
+### Qualitative Metrics
+
+| 지표 | 목표 | 측정 방법 |
+|------|------|---------|
+| **사용 만족도** | 4.5/5 | 사용자 설문 |
+| **추천 의향** | > 80% | NPS 점수 |
+| **인터페이스 직관성** | SUS > 70 | SUS 설문 |
+| **기능 유용성** | > 90% | 기능 사용도 분석 |
+
+---
+
+## 🔄 개발 및 배포 계획
+
+### Phase 1: Core Development ✅
+- [x] LangGraph 워크플로우 설계
+- [x] 10개 노드 구현
+- [x] PDF 임베딩 파이프라인 개발
+- [x] ChromaDB 통합
+- [x] Gradio 인터페이스 개발
+
+### Phase 2: Integration & Testing ✅
+- [x] 컴포넌트 통합
+- [x] 엔드-투-엔드 테스트
+- [x] 성능 최적화
+- [x] 오류 처리 강화
+
+### Phase 3: Deployment ✅
+- [x] Hugging Face Spaces 배포
+- [x] OpenAI API 통합
+- [x] 환경 변수 설정
+- [x] 모니터링 설정
+
+### Phase 4: Post-Launch (향후)
+- [ ] 사용자 피드백 수집
+- [ ] 성능 최적화
+- [ ] 기능 확장
+- [ ] 모바일 앱 개발
+
+---
+
+## 🎓 학습 및 개선 계획
+
+### 단기 (1개월)
+- 사용자 피드백 수집
+- 버그 픽스
+- 성능 최적화
+- 문서화 개선
+
+### 중기 (3개월)
+- 다국어 지원 (한국어, 중국어, 일본어)
+- 고급 검색 필터 추가
+- 팀 협업 기능
+- API 제공
+
+### 장기 (6개월)
+- 모바일 앱
+- 클라우드 API 서비스
+- 엔터프라이즈 배포
+- 머신러닝 최적화
+
+---
+
+## 🛠️ 기술 스택 상세
+
+### Frontend
+- **Gradio 6.3.0**: 웹 UI 프레임워크
+- **Python 3.10+**: 백엔드 언어
+
+### Orchestration & Workflow
+- **LangGraph**: 워크플로우 오케스트레이션
+- **LangChain**: LLM 통합
+
+### LLM & NLP
+- **OpenAI API**
+  - GPT-4o: 주요 분석, 답변 생성
+  - GPT-4 Turbo: 경량 분석
+- **Sentence Transformers**: 임베딩 (all-MiniLM-L6-v2)
+
+### Data & Search
+- **arXiv API**: 논문 검색
+- **ChromaDB**: 벡터 저장소
+- **pdfplumber**: PDF 텍스트 추출
+
+### Processing
+- **LangChain Text Splitters**: 청킹
+- **concurrent.futures**: 병렬 처리
+- **requests**: HTTP 통신
+
+### Deployment
+- **Hugging Face Spaces**: 클라우드 호스팅
+- **Git**: 버전 관리
+- **Python-dotenv**: 환경 변수 관리
+
+---
+
+## 📚 부록: API 명세
+
+### ResearchAssistant.start()
+```python
+def start(question: str, session_id: str = "default") -> dict:
     """
-    논문의 연관성을 0-1 사이 점수로 평가
+    워크플로우를 시작합니다.
     
-    평가 요소:
-    1. 키워드 매칭 점수 (0.3)
-    2. 의미적 유사도 (Embedding Cosine Similarity) (0.4)
-    3. 출판 연도 최신성 (0.1)
-    4. 인용 수/영향력 (0.2)
+    Args:
+        question: 사용자의 연구 질문
+        session_id: 세션 ID
+    
+    Returns:
+        {
+            "status": "waiting_for_input",
+            "interrupt_stage": 1,
+            "message": "키워드를 확인해주세요",
+            "options": ["확인", "다시"],
+            "keywords": ["keyword1", "keyword2"],
+            "thread_id": "uuid"
+        }
     """
-    keyword_score = calculate_keyword_match(query, paper)
-    semantic_score = calculate_semantic_similarity(query, paper.abstract)
-    recency_score = calculate_recency(paper.published_date)
-    impact_score = calculate_impact(paper.citations)
-    
-    final_score = (
-        keyword_score * 0.3 +
-        semantic_score * 0.4 +
-        recency_score * 0.1 +
-        impact_score * 0.2
-    )
-    return final_score
 ```
 
-### 3.5 논문 요약 생성
-
-| 항목 | 설명 |
-|------|------|
-| 기능명 | Paper Summarization |
-| 입력 | 논문 제목, 초록, (선택적) 본문 |
-| 출력 | 구조화된 요약 |
-
-**요약 구조**:
-```markdown
-## 논문 요약
-
-### 1. 핵심 아이디어
-[논문의 주요 기여점]
-
-### 2. 연구 배경 및 문제점
-[해결하고자 하는 문제]
-
-### 3. 제안 방법론
-[문제 해결 접근법]
-
-### 4. 실험 및 성능 지표
-[주요 실험 결과]
-
-### 5. 한계점 및 향후 연구
-[알려진 제한사항]
-```
-
-### 3.6 웹 검색 지원
-
-| 항목 | 설명 |
-|------|------|
-| 기능명 | Web Search Integration |
-| 목적 | 논문 외 최신 정보 보완 |
-| API 옵션 | Tavily API / Serper API |
-| 사용 시점 | 논문만으로 부족한 경우 / 최신 뉴스 필요 시 |
-
-### 3.7 Memory 시스템
-
-#### Short-term Memory
+### ResearchAssistant.continue_with_response()
 ```python
-class ShortTermMemory:
-    """현재 세션 내 임시 저장"""
+def continue_with_response(user_response: str) -> dict:
+    """
+    사용자 응답을 받아 워크플로우를 계속합니다.
     
-    def __init__(self):
-        self.current_session_id: str
-        self.conversation_history: List[Message]
-        self.search_results_cache: Dict[str, List[Paper]]
-        self.analysis_state: Dict
-        
-    def add_message(self, message: Message):
-        """대화 메시지 추가"""
-        
-    def get_context(self, window_size: int = 5) -> str:
-        """최근 대화 맥락 반환"""
-```
-
-#### Long-term Memory
-```python
-class LongTermMemory:
-    """영구 저장소 (Vector DB + SQL)"""
+    Args:
+        user_response: 사용자의 응답
     
-    def __init__(self, user_id: str):
-        self.user_id = user_id
-        self.vector_store: Weaviate
-        self.metadata_store: PostgreSQL
-        
-    def save_interaction(self, interaction: Interaction):
-        """질문-응답 쌍 저장"""
-        
-    def retrieve_similar(self, query: str, k: int = 5) -> List[Interaction]:
-        """유사한 과거 상호작용 검색"""
-        
-    def get_user_preferences(self) -> UserPreferences:
-        """사용자 선호도/관심사 반환"""
+    Returns:
+        {
+            "status": "completed|waiting_for_input|error",
+            "response": "최종 답변 (완료 시)",
+            "message": "다음 질문 (대기 시)",
+            "keywords": "[새 키워드들]"
+        }
+    """
 ```
 
----
-
-## 4. 데이터 구축 전략
-
-### 4.1 데이터 파이프라인
-
-```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  논문 검색   │ →  │  메타데이터   │ →  │   텍스트     │ →  │   임베딩     │
-│   API 호출   │    │    추출      │    │   청킹       │    │    생성      │
-└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
-                                                                    │
-                                                                    ▼
-                                                           ┌──────────────┐
-                                                           │ Vector DB    │
-                                                           │   저장       │
-                                                           └──────────────┘
-```
-
-### 4.2 청킹 전략
-
-| 파라미터 | 값 | 이유 |
-|----------|-----|------|
-| Chunk Size | 512 tokens | 논문 섹션 단위 유지 |
-| Overlap | 50 tokens | 문맥 연결성 보장 |
-| Splitter | RecursiveCharacterTextSplitter | 구조적 분할 |
-
-### 4.3 메타데이터 스키마
-
-```json
-{
-  "paper_id": "string",
-  "title": "string",
-  "authors": ["string"],
-  "abstract": "string",
-  "published_date": "date",
-  "source": "arXiv|SemanticScholar|PubMed|...",
-  "url": "string",
-  "keywords": ["string"],
-  "citations": "integer",
-  "embedding_model": "string",
-  "chunk_index": "integer",
-  "indexed_at": "datetime"
-}
-```
-
----
-
-## 5. 임베딩 모델
-
-### 5.1 모델 선택
-
-| 모델명 | 차원 | 특징 | 선택 이유 |
-|--------|------|------|----------|
-| **all-MiniLM-L6-v2** | 384 | 빠른 속도, 경량 | 기본 추천 |
-| all-mpnet-base-v2 | 768 | 높은 정확도 | 정확도 중시 시 |
-| text-embedding-3-small | 1536 | OpenAI 모델 | API 비용 허용 시 |
-
-### 5.2 추천 모델
-**sentence-transformers/all-MiniLM-L6-v2**
-- 무료, 로컬 실행 가능
-- 학술 텍스트에 적합한 성능
-- Hugging Face에서 쉽게 사용
-
+### ResearchAssistant.run()
 ```python
-from sentence_transformers import SentenceTransformer
-
-model = SentenceTransformer('all-MiniLM-L6-v2')
-embeddings = model.encode(texts)
+def run(question: str, paper_count: int = 3) -> str:
+    """
+    자동 실행 모드: Interrupt 없이 전체 과정 자동 수행.
+    
+    Args:
+        question: 사용자의 연구 질문
+        paper_count: 검색할 논문 수 (1-10)
+    
+    Returns:
+        최종 답변 문자열
+    """
 ```
 
 ---
 
-## 6. Vector Database 선택
+## 📞 Contact & Support
+- jsy6411897@gmail.com
 
-### 6.1 Chroma vs Weaviate 비교
+**프로젝트 정보:**
+- GitHub: [URL]
+- Hugging Face: https://huggingface.co/spaces/Jusoyoung/ara-research-assistant
+- 이메일: jsy6411897@gmail.com
 
-| 항목 | Chroma | Weaviate |
-|------|--------|----------|
-| 설치 복잡도 | ★☆☆ (매우 쉬움) | ★★☆ (Docker 필요) |
-| 초기 구축 시간 | 빠름 (수 분) | 중간 (30분-1시간) |
-| 확장성 | 제한적 | 높음 |
-| 하이브리드 검색 | 기본 지원 안함 | 기본 지원 |
-| 필터링 | 기본적 | 고급 필터링 |
-| 프로덕션 준비도 | 개발/프로토타입 | 프로덕션 레디 |
-| 데이터 양 | ~100K 문서 | 수백만 문서 |
-
-### 6.2 추천: **Weaviate**
-
-**선택 이유**:
-1. 논문 검색 프로젝트는 데이터량이 증가할 가능성이 높음
-2. 하이브리드 검색(Semantic + Keyword)이 논문 검색에 필수
-3. Docker 환경이 이미 준비됨
-4. 메타데이터 필터링이 강력함 (연도, 출처별 필터링)
-
-### 6.3 Weaviate Docker 설정
-
-```yaml
-# docker-compose.yml
-version: '3.4'
-services:
-  weaviate:
-    image: semitechnologies/weaviate:1.23.0
-    ports:
-      - "8080:8080"
-    environment:
-      QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      DEFAULT_VECTORIZER_MODULE: 'none'
-      ENABLE_MODULES: ''
-      CLUSTER_HOSTNAME: 'node1'
-    volumes:
-      - weaviate_data:/var/lib/weaviate
-
-volumes:
-  weaviate_data:
-```
+**버그 보고 및 기능 요청:**
+- GitHub Issues
+- Email with [BUG] or [FEATURE] prefix
 
 ---
 
-## 7. 개발 환경 및 기술 스택
-
-### 7.1 기술 스택
-
-| 영역 | 기술 |
-|------|------|
-| 언어 | Python 3.10+ |
-| 프레임워크 | FastAPI + Gradio |
-| AI/LLM | OpenAI GPT-4o / Claude API |
-| 오케스트레이션 | LangGraph 0.2+ |
-| Vector DB | Weaviate |
-| 캐시/세션 | Redis |
-| 영구 저장 | PostgreSQL |
-| 임베딩 | sentence-transformers |
-| 웹 검색 | Tavily API |
-| 컨테이너 | Docker + Docker Compose |
-| 배포 | Hugging Face Spaces |
-
-### 7.2 Python 패키지
-
-```txt
-# requirements.txt
-fastapi>=0.109.0
-uvicorn>=0.27.0
-gradio>=4.14.0
-langchain>=0.1.0
-langgraph>=0.0.40
-langchain-openai>=0.0.5
-langchain-community>=0.0.16
-weaviate-client>=4.4.0
-sentence-transformers>=2.2.2
-arxiv>=2.1.0
-requests>=2.31.0
-python-dotenv>=1.0.0
-redis>=5.0.0
-psycopg2-binary>=2.9.9
-pydantic>=2.5.0
-httpx>=0.26.0
-tavily-python>=0.3.0
-```
-
-### 7.3 환경 변수
-
-```bash
-# .env
-OPENAI_API_KEY=sk-...
-TAVILY_API_KEY=tvly-...
-WEAVIATE_URL=http://localhost:8080
-REDIS_URL=redis://localhost:6379
-DATABASE_URL=postgresql://user:pass@localhost:5432/research_assistant
-```
-
----
-
-## 8. 프로젝트 구조
-
-```
-AI-Research-Assistant/
-│
-├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI + Gradio 진입점
-│   ├── config.py               # 설정 관리
-│   │
-│   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── research_agent.py   # 메인 ReAct 에이전트
-│   │   └── prompts.py          # 프롬프트 템플릿
-│   │
-│   ├── graph/
-│   │   ├── __init__.py
-│   │   ├── state.py            # LangGraph State 정의
-│   │   ├── nodes.py            # 그래프 노드들
-│   │   ├── edges.py            # 조건부 엣지
-│   │   └── workflow.py         # 전체 워크플로우
-│   │
-│   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── paper_search/
-│   │   │   ├── __init__.py
-│   │   │   ├── arxiv_tool.py
-│   │   │   ├── semantic_scholar_tool.py
-│   │   │   ├── pubmed_tool.py
-│   │   │   └── korean_sources.py  # DBpia, RISS
-│   │   ├── web_search.py
-│   │   └── summarizer.py
-│   │
-│   ├── memory/
-│   │   ├── __init__.py
-│   │   ├── short_term.py       # 세션 메모리
-│   │   └── long_term.py        # 영구 메모리
-│   │
-│   ├── vectorstore/
-│   │   ├── __init__.py
-│   │   ├── weaviate_client.py
-│   │   └── embeddings.py
-│   │
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── paper.py            # Paper 데이터 모델
-│   │   ├── user.py             # User 모델
-│   │   └── conversation.py     # 대화 모델
-│   │
-│   └── utils/
-│       ├── __init__.py
-│       ├── relevance.py        # 연관성 평가
-│       └── formatters.py       # 출력 포매팅
-│
-├── ui/
-│   ├── gradio_app.py           # Gradio UI
-│   └── components/
-│       ├── chat.py
-│       └── settings.py
-│
-├── tests/
-│   ├── __init__.py
-│   ├── test_agents.py
-│   ├── test_tools.py
-│   └── test_memory.py
-│
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-│
-├── scripts/
-│   ├── setup_weaviate.py       # Weaviate 스키마 설정
-│   └── seed_data.py            # 초기 데이터
-│
-├── .env.example
-├── requirements.txt
-├── README.md
-└── PRD.md
-```
-
----
-
-## 9. 부록
-
-### A. ReAct 패턴 상세
-
-```
-Thought: 사용자의 질문을 분석한 결과, "자율주행 LiDAR" 관련 
-         최신 기술 동향을 알고 싶어하는 것으로 파악됩니다.
-         핵심 키워드: "autonomous driving", "LiDAR", "point cloud"
-
-Action: search_papers(
-    keywords=["autonomous driving LiDAR point cloud"],
-    sources=["arxiv", "semantic_scholar"],
-    max_results=5
-)
-
-Observation: 5개의 논문을 찾았습니다:
-    1. "PointPillars: Fast Encoders..." (relevance: 0.92)
-    2. "LiDAR-based 3D Object Detection..." (relevance: 0.88)
-    ...
-
-Thought: 상위 2개 논문이 높은 연관성을 보입니다. 
-         사용자에게 검색 결과를 확인받겠습니다.
-
-[INTERRUPT: 사용자 확인 대기]
-```
-
-### B. API 비용 추정
-
-| 항목 | 예상 사용량 | 단가 | 월 예상 비용 |
-|------|------------|------|-------------|
-| GPT-4o (요약) | 100K tokens | $5/1M | ~$0.5 |
-| GPT-4o-mini (분석) | 500K tokens | $0.15/1M | ~$0.08 |
-| Embedding | 1M tokens | $0.02/1M | ~$0.02 |
-| Tavily | 1000 calls | $0.01/call | ~$10 |
-
-### C. 참고 자료
-- LangGraph 공식 문서: https://langchain-ai.github.io/langgraph/
-- Weaviate 공식 문서: https://weaviate.io/developers/weaviate
-- arXiv API: https://info.arxiv.org/help/api/
-- Semantic Scholar API: https://api.semanticscholar.org/
+**Document Version**: 2.3
+**Last Updated**: 2026-01-15
+**Status**: ✅ COMPLETE
