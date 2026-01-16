@@ -98,6 +98,8 @@
 - 약 2GB의 여유 디스크 공간
 
 #### Step 1: 저장소 클론
+git clone https://github.com/soyoungju03/AI-hackathon-ARA.git
+또는
 ```bash
 # GitHub에서 프로젝트 다운로드
 ZIP 파일로 다운로드:
@@ -111,22 +113,29 @@ cd AI-hackathon-ARA
 
 #### Step 2: 가상 환경 생성
 **Windows:**
-```bash
+Remove-Item -Recurse -Force venv
 python -m venv venv
-venv\Scripts\activate
-```
+.\venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
 
-**Mac/Linux:**
-```bash
+**Mac:**
+rm -rf venv
 python3 -m venv venv
 source venv/bin/activate
-```
+pip install --upgrade pip
+pip install -r requirements.txt
 
-활성화 확인 (프롬프트 앞에 `(venv)` 표시):
-```
-(venv) user@computer:~/AI-hackathon-ARA$
-```
----
+**Linux:**
+rm -rf venv
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# (venv)가 터미널에 보이면 성공! ✅
+(venv) soyoung@soyoung-XPS-15-9530:~/AI-hackathon-ARA$
+
 
 #### Step 3: 의존성 설치
 ```bash
