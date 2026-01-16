@@ -10,12 +10,15 @@
 
 세션 기반 상태 관리로 사용자의 대화 흐름을 완벽하게 추적합니다.
 
-수정 사항: Gradio 6.3.0 최신 API - type 파라미터 제거, theme을 launch()로 이동
+수정 사항:
+1. get_pdf_pipeline import 경로 수정: app.graph.workflow → app.graph.nodes
+2. 포트 충돌 문제 해결: 포트 자동 증가 로직 추가
 """
 
 import os
 import sys
 import logging
+import socket
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -53,6 +56,26 @@ Hugging Face Spaces 사용자:
         """
     
     return True, api_key
+
+
+# ============================================
+# 포트 유틸리티 함수
+# ============================================
+
+def is_port_in_use(port: int) -> bool:
+    """주어진 포트가 사용 중인지 확인합니다."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result = sock.connect_ex(('127.0.0.1', port))
+    sock.close()
+    return result == 0
+
+
+def find_available_port(start_port: int = 7860, max_attempts: int = 10) -> int:
+    """사용 가능한 포트를 찾습니다."""
+    for port in range(start_port, start_port + max_attempts):
+        if not is_port_in_use(port):
+            return port
+    return start_port  # 마지막 수단으로 기본 포트 반환
 
 
 # ============================================
@@ -277,7 +300,8 @@ def quick_search(question: str, paper_count: int) -> str:
 # PDF 파이프라인 미리 초기화 (모델 로드)
 logger.info("PDF 임베딩 파이프라인을 미리 로드하는 중...")
 try:
-    from app.graph.workflow import get_pdf_pipeline
+    # 수정됨: get_pdf_pipeline은 app.graph.nodes에 정의되어 있습니다
+    from app.graph.nodes import get_pdf_pipeline
     pipeline = get_pdf_pipeline()
     logger.info("✓ PDF 파이프라인 로드 완료")
 except Exception as e:
@@ -499,9 +523,14 @@ if __name__ == "__main__":
             secondary_hue="slate",
         )
         
+        # 수정됨: 포트 충돌 자동 처리
+        port = find_available_port(start_port=7860)
+        
+        logger.info(f"포트 {port} 사용 중...")
+        
         demo.launch(
             server_name="0.0.0.0",
-            server_port=7860,
+            server_port=port,
             share=True,
             theme=theme
         )
