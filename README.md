@@ -12,14 +12,12 @@
 - **대화형 인터페이스**: 사용자가 중간에 개입하여 검색 결과의 정확성 향상
 - **실시간 처리**: 질문부터 답변까지 평균 2-5분
 
-
 ### 대상 사용자
 - 🎓 대학원생 및 박사 과정 학생
 - 📚 학술 연구원
 - 🔬 산업 R&D 팀
 - 📖 문헌 조사가 필요한 모든 사람
 ---
-
 
 ## 🏗️ 시스템 아키텍처
 ```
@@ -79,18 +77,16 @@
 │  [사용자에게 표시]                                           │
 └─────────────────────────────────────────────────────────────┘
 ```
-
 ---
 ### 📊 기술 스택 한눈에 보기
-✅ RAG 패턴 - arXiv API + PDF 처리 + ChromaDB + 의미 검색 + LLM
-✅ LangGraph - 11개 노드, 20개 state 필드, 조건부 라우팅
-✅ 임베딩 모델 - distiluse, 384차원, 다국어
-✅ ChromaDB - 벡터 저장소, 코사인 유사도
-✅ arXiv API - 논문 검색
-✅ OpenAI API - GPT-4, GPT-4o
-✅ 추가 기술 - pdfplumber, concurrent.futures, Gradio
+ 1. RAG 패턴 - arXiv API + PDF 처리 + ChromaDB + 의미 검색 + LLM
+ 2. LangGraph - 11개 노드, 20개 state 필드, 조건부 라우팅
+ 3. 임베딩 모델 - distiluse, 384차원, 다국어
+ 4. ChromaDB - 벡터 저장소, 코사인 유사도
+ 5. arXiv API - 논문 검색
+ 6. OpenAI API - GPT-4, GPT-4o
+ 7. 추가 기술 - pdfplumber, concurrent.futures, Gradio
 ---
-
 
 ## 🚀 설치 및 실행 방법 (상세 가이드)
 ### ⚡ 빠른 시작 (3분)
@@ -104,8 +100,8 @@
 #### Step 1: 저장소 클론
 ```bash
 # GitHub에서 프로젝트 다운로드
-git clone https://github.com/Jusoyoung/ara-research-assistant.git
-cd ara-research-assistant
+git clone https://github.com/soyoungju03/AI-hackathon-ARA.git
+cd AI-hackathon-ARA
 ```
 
 또는 ZIP 파일로 다운로드:
@@ -113,7 +109,7 @@ cd ara-research-assistant
 - 압축 해제 후 폴더로 이동
 
 ```bash
-cd ara-research-assistant
+cd AI-hackathon-ARA
 ```
 ---
 
@@ -132,7 +128,7 @@ source venv/bin/activate
 
 활성화 확인 (프롬프트 앞에 `(venv)` 표시):
 ```
-(venv) user@computer:~/ara-research-assistant$
+(venv) user@computer:~/AI-hackathon-ARA$
 ```
 ---
 
@@ -208,7 +204,6 @@ https://1db4c0cf0f19ddc8f2.gradio.live
 - 모바일: 모바일 브라우저에서도 접속 가능
 ---
 
-
 ### 🎮 사용 예시
 #### 예시 1: 대화형 검색 (권장)
 
@@ -251,7 +246,6 @@ AI 요청: "검색할 논문의 개수를 선택해주세요 (1-10)"
    
 ... (더 많은 내용)"
 ```
-
 ---
 ## 📖 사용 흐름도
 ```
@@ -287,7 +281,6 @@ AI 요청: "검색할 논문의 개수를 선택해주세요 (1-10)"
   ↓
 끝
 ```
-
 ---
 ## 🔑 핵심 기능
 
@@ -336,6 +329,18 @@ AI 요청: "검색할 논문의 개수를 선택해주세요 (1-10)"
 - 추가 학습을 위한 제안 포함
 
 
+## 📈 성능 지표
+### 처리 시간
+| 단계 | 예상 시간 | 비고 |
+|------|---------|------|
+| 키워드 추출 | 3-5초 | GPT-4o 경량 모델 |
+| arXiv 검색 | 2-3초 | 10-100개 논문 |
+| PDF 처리 | 30-120초 | 논문당 15-30초 |
+| 의미 검색 | 2-5초 | ChromaDB 쿼리 |
+| 답변 생성 | 5-10초 | GPT-4o 이용 |
+| **총 소요 시간** | **2-5분** | **3개 논문 기준** |
+
+
 ## 📁 프로젝트 구조
 ```
 ara-research-assistant/
@@ -371,7 +376,6 @@ ara-research-assistant/
     └── logs/                       # 로그 파일
 ```
 
-
 ### 핵심 파일 설명
 
 | 파일 | 설명 |
@@ -386,7 +390,6 @@ ara-research-assistant/
 | `arxiv_tool.py` | arXiv API 검색 래퍼 |
 
 ---
-
 
 ## 🔄 워크플로우 상세 흐름
 ### 상태 다이어그램
