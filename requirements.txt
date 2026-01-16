@@ -1,3 +1,4 @@
+cat > requirements.txt << 'EOF'
 # AI Research Assistant - Dependencies
 # =====================================
 
@@ -17,6 +18,9 @@ sentence-transformers>=2.2.2
 # === Paper Search ===
 arxiv>=2.1.0
 
+# === PDF Processing ===
+pdfplumber>=0.10.0
+
 # === Configuration ===
 python-dotenv>=1.0.0
 pydantic>=2.5.0
@@ -27,8 +31,12 @@ requests>=2.31.0
 httpx>=0.26.0
 
 # === Vector Database ===
-chromadb
+chromadb>=0.4.0
+
+# === RSS & Feed Parsing ===
+feedparser>=6.0.0
 
 # === Utilities ===
 typing-extensions>=4.9.0
-feedparser
+numpy>=1.24.0
+EOF
