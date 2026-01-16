@@ -100,11 +100,7 @@
 #### Step 1: 저장소 클론
 ```bash
 # GitHub에서 프로젝트 다운로드
-git clone https://github.com/soyoungju03/AI-hackathon-ARA.git
-cd AI-hackathon-ARA
-```
-
-또는 ZIP 파일로 다운로드:
+ZIP 파일로 다운로드:
 - 우측 상단 "Code" → "Download ZIP" 클릭
 - 압축 해제 후 폴더로 이동
 
