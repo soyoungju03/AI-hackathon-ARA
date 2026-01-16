@@ -1,13 +1,11 @@
 # 🤖 ARA (AI Research Assistant)
 
 **AI 기반 학술 논문 검색 및 분석 시스템**
-
-> 자연스러운 언어로 연구 질문을 입력하면, AI가 arXiv에서 관련 논문을 검색하고, PDF를 자동으로 처리하여 의미론적으로 가장 관련성 높은 정보를 찾아 종합적인 답변을 제공하는 지능형 연구 도우미입니다.
-
+사용자가 연구 질문을 입력하면, AI가 arXiv에서 관련 논문을 검색하고, PDF를 자동으로 처리하여 의미론적으로 가장 관련성 높은 정보를 찾아 종합적인 답변을 제공하는 지능형 연구 도우미입니다.
 ---
 
-## 🎯 프로젝트 개요
 
+## 🎯 프로젝트 개요
 ### 핵심 가치
 - **효율적인 문헌 조사**: 수백 개의 논문을 수동으로 검토할 필요 없음
 - **지능형 정보 추출**: AI가 PDF 전문을 분석하여 핵심 내용만 추출
@@ -19,11 +17,9 @@
 - 📚 학술 연구원
 - 🔬 산업 R&D 팀
 - 📖 문헌 조사가 필요한 모든 사람
-
 ---
 
 ## 🏗️ 시스템 아키텍처
-
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      사용자 인터페이스                        │
@@ -73,7 +69,7 @@
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
 │              LLM 기반 답변 생성 (OpenAI GPT-4)               │
-│                                                              │
+│                                                               │
 │  [논문 요약 생성]                                            │
 │      ↓                                                      │
 │  [종합 답변 생성]                                            │
@@ -81,9 +77,211 @@
 │  [사용자에게 표시]                                           │
 └─────────────────────────────────────────────────────────────┘
 ```
+---
+### 📊 기술 스택 한눈에 보기
+✅ RAG 패턴 - arXiv API + PDF 처리 + ChromaDB + 의미 검색 + LLM
+✅ LangGraph - 11개 노드, 20개 state 필드, 조건부 라우팅
+✅ 임베딩 모델 - distiluse, 384차원, 다국어
+✅ ChromaDB - 벡터 저장소, 코사인 유사도
+✅ arXiv API - 논문 검색
+✅ OpenAI API - GPT-4, GPT-4o
+✅ 추가 기술 - pdfplumber, concurrent.futures, Gradio
+---
+
+## 🚀 설치 및 실행 방법 (상세 가이드)
+### ⚡ 빠른 시작 (3분)
+#### 사전 요구사항
+- Python 3.10 이상
+- pip (Python 패키지 관리자)
+- OpenAI API 키 ([https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)에서 발급)
+- 인터넷 연결
+- 약 2GB의 여유 디스크 공간
+
+#### Step 1: 저장소 클론
+```bash
+# GitHub에서 프로젝트 다운로드
+git clone https://github.com/Jusoyoung/ara-research-assistant.git
+cd ara-research-assistant
+```
+
+또는 ZIP 파일로 다운로드:
+- 우측 상단 "Code" → "Download ZIP" 클릭
+- 압축 해제 후 폴더로 이동
+
+```bash
+cd ara-research-assistant
+```
+---
+
+#### Step 2: 가상 환경 생성
+**Windows:**
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+**Mac/Linux:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+활성화 확인 (프롬프트 앞에 `(venv)` 표시):
+```
+(venv) user@computer:~/ara-research-assistant$
+```
+---
+
+#### Step 3: 의존성 설치
+```bash
+# 모든 필요한 패키지 설치
+pip install -r requirements.txt
+```
+
+**설치 시간**: 약 2-5분 (인터넷 속도에 따라 다름)
+
+설치 완료 메시지:
+```
+Successfully installed gradio-6.3.0 langchain-0.1.0 langgraph-0.0.40 ...
+```
+
+---
+#### Step 4: OpenAI API 키 설정
+**Step 4-1: API 키 발급**
+1. [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys) 접속
+2. "Create new secret key" 클릭
+3. 키 복사 (예: `sk-proj-abc123...`)
+**Step 4-2: .env 파일 생성**
+프로젝트 루트 디렉토리(`ara-research-assistant/`)에 `.env` 파일 생성:
+**Windows (PowerShell):**
+```powershell
+# .env 파일 생성
+echo "OPENAI_API_KEY=sk-your-api-key-here" > .env
+```
+**Windows (명령 프롬프트):**
+```cmd
+echo OPENAI_API_KEY=sk-your-api-key-here > .env
+```
+**Mac/Linux:**
+```bash
+echo "OPENAI_API_KEY=sk-your-api-key-here" > .env
+```
+**파일 확인:**
+```bash
+cat .env  # 또는 .env 파일을 텍스트 에디터로 열기
+```
+
+예시 내용:
+```
+OPENAI_API_KEY=sk-proj-abcdef123456789...
+```
+
+⚠️ **보안 주의**: 
+- API 키는 절대 GitHub에 업로드하지 마세요
+- `.gitignore`에 이미 `.env`가 포함되어 있습니다
 
 ---
 
+#### Step 5: 애플리케이션 실행
+```bash
+python app.py
+```
+**실행 대기 시간**: 처음 실행 시 30초~2분 (모델 다운로드)
+**성공 시 콘솔 출력:**
+```
+INFO:     Uvicorn running on http://127.0.0.1:7860
+INFO:     Running on public URL: https://1db4c0cf0f19ddc8f2.gradio.live
+```
+---
+#### Step 6: 브라우저에서 접속
+위에서 나온 **공개 URL 복사**:
+```
+https://1db4c0cf0f19ddc8f2.gradio.live
+```
+
+이 URL을 **웹 브라우저**에 붙여넣고 엔터:
+- 데스크톱: Chrome, Firefox, Safari 등
+- 모바일: 모바일 브라우저에서도 접속 가능
+---
+
+### 🎮 사용 예시
+#### 예시 1: 대화형 검색 (권장)
+
+```
+[Step 1] 질문 입력
+사용자 입력: "Transformer 모델의 효율성 개선"
+
+[Step 2] AI 분석
+AI 응답:
+"다음 키워드를 추출했습니다.
+키워드: Transformer, efficiency, optimization
+
+맞으면 '확인', 수정이 필요하면 '다시'라고 입력해주세요."
+
+사용자 입력: 확인
+
+[Step 3] 논문 수 선택
+AI 요청: "검색할 논문의 개수를 선택해주세요 (1-10)"
+사용자 입력: 5(숫자만 입력!!!)
+
+[Step 4] 처리 진행 (자동)
+진행 상황:
+- arXiv 검색 중... ✓
+- PDF 다운로드 중... ✓
+- 텍스트 추출 중... ✓
+- 임베딩 생성 중... ✓
+- 의미 검색 중... ✓
+
+[Step 5] 결과 수신
+최종 답변:
+"Transformer 모델의 효율성 개선을 위한 주요 기법들:
+
+1. Knowledge Distillation
+   - 큰 모델에서 작은 모델로 지식 전이
+   - 성능 유지하면서 크기 90% 감소
+   
+2. Quantization
+   - 모델 가중치를 낮은 정밀도로 저장
+   - 메모리 사용량 70% 감소
+   
+... (더 많은 내용)"
+```
+---
+## 📖 사용 흐름도
+```
+시작
+  ↓
+[Step 1] 질문 입력
+"당신의 연구 질문을 입력하세요"
+  ↓
+[Step 2] AI가 자동으로 분석
+- 키워드 추출
+- 질문 의도 파악
+- 연구 도메인 분류
+  ↓
+[Step 3] 사용자 확인 (INTERRUPT 1)
+"추출된 키워드: [keyword1, keyword2]"
+  ├─ 확인 → Step 4로
+  └─ 다시 → Step 2로 (재분석)
+  ↓
+[Step 4] 논문 개수 선택 (INTERRUPT 2)
+"1-10개 중 선택"
+  ↓
+[Step 5] 자동 처리 (모두 자동)
+├─ arXiv 검색 (1-2초)
+├─ PDF 다운로드 (20-30초)
+├─ 텍스트 추출 (10-20초)
+├─ 임베딩 생성 (20-30초)
+├─ 의미 검색 (2-5초)
+├─ 논문 요약 (10-20초)
+└─ 최종 답변 생성 (5-10초)
+  ↓
+[Step 6] 결과 수신
+"종합적인 분석 답변"
+  ↓
+끝
+```
+---
 ## 🔑 핵심 기능
 
 ### 1️⃣ 두 단계 Human-in-the-Loop
@@ -130,71 +328,8 @@
 - 논문 요약 및 연구 동향 분석
 - 추가 학습을 위한 제안 포함
 
----
-
-## 📊 기술 스택
-
-| 계층 | 기술 | 설명 |
-|------|------|------|
-| **UI** | Gradio 6.3.0 | 웹 기반 사용자 인터페이스 |
-| **오케스트레이션** | LangGraph | 워크플로우 및 상태 관리 |
-| **LLM** | OpenAI GPT-4o | 질문 분석 및 답변 생성 |
-| **검색** | arXiv API | 학술 논문 검색 |
-| **임베딩** | Sentence Transformers | 텍스트 벡터화 (all-MiniLM-L6-v2) |
-| **벡터 DB** | ChromaDB | 임베딩된 청크 저장 및 검색 |
-| **PDF 처리** | pdfplumber | PDF 텍스트 추출 |
-| **배포** | Hugging Face Spaces | 클라우드 호스팅 |
-
----
-
-## 🚀 사용 방법
-
-### 1. 대화형 검색 (권장)
-
-**Step 1: 질문 입력**
-```
-당신의 연구 질문을 입력하세요.
-예: "Transformer 모델의 attention 메커니즘 설명"
-```
-
-**Step 2: 키워드 확인**
-```
-추출된 키워드:
-- Transformer
-- Attention mechanism
-- Deep learning
-
-맞으면 "확인", 수정이 필요하면 "다시"를 입력하세요.
-```
-
-**Step 3: 논문 수 선택**
-```
-검색할 논문의 개수를 선택해주세요 (1-10):
-3
-```
-
-**Step 4: 결과 수신**
-```
-검색 결과:
-- 검색된 논문: 3개
-- 처리된 청크: 150개
-- 상위 관련 청크: 6개
-
-최종 답변:
-[논문 기반의 종합적인 답변]
-```
-
-### 2. 빠른 검색
-
-- 논문 개수를 미리 선택
-- 질문을 입력
-- Interrupt 없이 자동으로 진행
-- 사용자 입력 없이 빠른 결과 제공
-
----
 
 ## 📈 성능 지표
-
 ### 처리 시간
 | 단계 | 예상 시간 | 비고 |
 |------|---------|------|
@@ -205,60 +340,8 @@
 | 답변 생성 | 5-10초 | GPT-4o 이용 |
 | **총 소요 시간** | **2-5분** | **3개 논문 기준** |
 
-### 리소스 사용
-- **메모리**: 2-4GB (실행 중)
-- **디스크**: 500MB-2GB (저장된 임베딩)
-- **네트워크**: 50-200MB (PDF 다운로드)
-
----
-
-## 🔧 설치 및 실행
-
-### 로컬 개발 환경
-
-**1. 저장소 클론**
-```bash
-git clone https://huggingface.co/spaces/Jusoyoung/ara-research-assistant
-cd ara-research-assistant
-```
-
-**2. 가상 환경 생성**
-```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 또는
-venv\Scripts\activate  # Windows
-```
-
-**3. 의존성 설치**
-```bash
-pip install -r requirements.txt
-```
-
-**4. 환경 변수 설정**
-```bash
-# .env 파일 생성
-echo "OPENAI_API_KEY=sk-your-key-here" > .env
-```
-
-**5. 애플리케이션 실행**
-```bash
-python app.py
-```
-
-**6. 브라우저에서 접속**
-```
-http://localhost:7860
-```
-
-### Hugging Face Spaces 배포
-
-**공개 URL**: [https://huggingface.co/spaces/Jusoyoung/ara-research-assistant](https://huggingface.co/spaces/Jusoyoung/ara-research-assistant)
-
----
 
 ## 📁 프로젝트 구조
-
 ```
 ara-research-assistant/
 ├── app.py                          # 메인 진입점 (Gradio UI)
@@ -309,7 +392,6 @@ ara-research-assistant/
 ---
 
 ## 🔄 워크플로우 상세 흐름
-
 ### 상태 다이어그램
 
 ```
@@ -365,109 +447,4 @@ ara-research-assistant/
               ↓
           END
 
-출력: final_response
 ```
-
----
-
-## 🎨 사용자 인터페이스
-
-### 대화형 검색 탭
-- Chatbot 형식의 대화형 인터페이스
-- 메시지 히스토리 저장
-- 자동 스크롤
-- 예시 질문 제공
-
-### 빠른 검색 탭
-- 논문 개수 슬라이더 (1-10)
-- 질문 입력 텍스트박스
-- 검색 버튼
-- 마크다운 형식의 결과 표시
-
-### 정보 탭
-- API 상태 확인
-- 시스템 정보
-- 기술 스택
-- 사용 가이드
-
----
-
-## 🐛 문제 해결
-
-### "OPENAI_API_KEY가 설정되지 않았습니다"
-```bash
-# Hugging Face Spaces 사용 시:
-# Settings → Repository secrets에서 OPENAI_API_KEY 추가
-
-# 로컬 실행 시:
-echo "OPENAI_API_KEY=sk-your-key" > .env
-```
-
-### "arXiv에서 관련 논문을 찾지 못했습니다"
-- 키워드를 더 구체적으로 입력
-- 검색할 논문 수를 늘림
-- 다른 표현으로 재시도
-
-### "PDF 처리 중 오류"
-- 인터넷 연결 확인
-- arXiv 서버 상태 확인
-- 디스크 공간 확인
-
-### "메모리 부족"
-- 검색할 논문 수를 줄임
-- 청크 크기 조정 (`pdf_embedding_pipeline_final.py`)
-
----
-
-## 📝 로깅
-
-모든 처리 과정은 상세하게 로깅됩니다.
-
-```bash
-# 터미널 로그
-[STAGE 0] 새 질문 시작: ...
-[ANALYZE_QUESTION] 질문 분석 시작
-  추출된 키워드: ['keyword1', 'keyword2']
-  질문 의도: 최신 연구 동향
-  연구 도메인: computer science
-[REQUEST_KEYWORD_CONFIRMATION] 사용자 확인 대기
-...
-```
-
----
-
-## 🤝 기여 및 피드백
-
-이 프로젝트는 AI Hackathon 프로젝트입니다.
-
-**피드백 및 개선 제안은 환영합니다!**
-
----
-
-## 📄 라이선스
-
-MIT License
-
----
-
-## 👨‍💻 개발자 정보
-
-**프로젝트**: AI Research Assistant (ARA)
-**개발자**: Soyoung JU
-**개발 기간**: 2025년 1월 (AI Hackathon)
-**버전**: 2.3 (Gradio 6.3.0 완전 호환)
-
----
-
-## 🙏 감사의 말
-
-- OpenAI (GPT-4o API)
-- arXiv (논문 검색 API)
-- LangChain & LangGraph (워크플로우)
-- ChromaDB (벡터 저장소)
-- Hugging Face (배포 플랫폼)
-- Gradio (사용자 인터페이스)
-
----
-
-**마지막 업데이트**: 2026년 1월 15일

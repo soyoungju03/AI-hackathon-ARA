@@ -1,9 +1,4 @@
 # PRD: AI Research Assistant (ARA)
-
-**문서 버전**: 2.3
-**최종 업데이트**: 2026년 1월 15일
-**프로젝트 상태**: ✅ 완료 및 배포 준비됨
-
 ---
 
 ## 📋 Executive Summary
@@ -19,7 +14,7 @@
 - 📖 **수동 분석**: 찾은 논문들을 수동으로 읽고 분석해야 함
 
 ### 해결책
-**AI Research Assistant**는 자연스러운 언어 질문을 통해 관련 논문을 자동으로 검색하고, PDF를 처리하여, 사용자의 질문에 정확히 답하는 AI 기반 솔루션입니다.
+**AI Research Assistant**는 자연어 질문을 통해 관련 논문을 자동으로 검색하고, PDF를 처리하여, 사용자의 질문에 정확히 답하는 AI 기반 솔루션입니다.
 
 ### 핵심 가치 제안
 | 가치 | 설명 |
@@ -32,29 +27,25 @@
 
 ---
 
-## 🎯 목표 및 성공 기준
+## 🎯 목표 사항
 
 ### Primary Goals
 
 1. **사용 편의성 극대화**
    - 자연어로 질문 입력 가능
    - 3단계의 간단한 대화형 인터페이스
-   - ✅ **성공 기준**: 사용자가 5분 이내에 첫 결과 획득
 
 2. **검색 정확도 극대화**
    - 의미 기반 검색으로 키워드 검색 능가
    - 사용자 피드백 반영 (재분석 기능)
-   - ✅ **성공 기준**: 관련성 점수 0.7 이상
 
 3. **자동화 극대화**
    - PDF 다운로드부터 분석까지 완전 자동화
    - 병렬 처리로 성능 최적화
-   - ✅ **성공 기준**: 3개 논문 처리 120초 이내
 
 4. **안정성 확보**
    - 오류 처리 및 자동 재시도
    - 네트워크 장애 시 graceful degradation
-   - ✅ **성공 기준**: 99% 가용성
 
 ### Secondary Goals
 
@@ -64,7 +55,7 @@
 
 ---
 
-## 📊 사용자 요구사항 (User Requirements)
+## 📊 타겟층 및 서비스의 시장성
 
 ### User Persona 1: 대학원생 (Graduate Student)
 **특성:**
@@ -78,11 +69,6 @@
 - 한국어 지원
 - 모바일 접근성
 
-**성공 지표:**
-- 사용 만족도 4.5/5 이상
-- 주 3회 이상 사용
-- 추천 의향 80% 이상
-
 ### User Persona 2: 연구원 (Researcher)
 **특성:**
 - 특정 분야의 깊이 있는 연구
@@ -95,11 +81,6 @@
 - 상세한 분석 결과
 - API 지원
 
-**성공 지표:**
-- 검색 정확도 90% 이상
-- 논문당 처리 시간 < 30초
-- 고급 기능 활용도 60% 이상
-
 ### User Persona 3: R&D 팀 (Industry)
 **특성:**
 - 경쟁 기술 조사 필요
@@ -111,18 +92,9 @@
 - 팀 협업 기능
 - 엔터프라이즈 배포
 - 데이터 보안
-
-**성공 지표:**
-- 배치 처리 성능 50개/시간
-- 팀 기능 채택률 70%
-- 보안 인증 획득
-
 ---
 
-## 🏗️ 기술 요구사항 (Technical Requirements)
-
-### Functional Requirements (기능 요구사항)
-
+## 🏗️ 기능 사항
 #### FR1: 질문 입력 및 분석
 ```
 FR1.1: 사용자가 자연언어 질문 입력 가능
@@ -165,51 +137,6 @@ FR5.3: 인용 문헌 포함
 FR5.4: 추가 학습 제안 포함
 ```
 
-### Non-Functional Requirements (비기능 요구사항)
-
-#### Performance Requirements
-```
-NF1.1: 응답 시간 < 5분 (3개 논문 기준)
-NF1.2: 임베딩 생성 < 5초
-NF1.3: 검색 쿼리 < 2초
-NF1.4: 답변 생성 < 15초
-NF1.5: 처리량 > 10개 사용자 동시 처리
-```
-
-#### Reliability Requirements
-```
-NF2.1: 가용성 > 99%
-NF2.2: 재시도 최대 3회
-NF2.3: 오류 복구 자동화
-NF2.4: 로깅 및 모니터링
-```
-
-#### Scalability Requirements
-```
-NF3.1: 동시 사용자 100명 지원
-NF3.2: 일일 처리 1000개 논문
-NF3.3: 저장소 확장성 자동
-NF3.4: 캐싱 메커니즘
-```
-
-#### Security Requirements
-```
-NF4.1: API 키 환경 변수 관리
-NF4.2: HTTPS 통신
-NF4.3: 입력 검증
-NF4.4: SQL injection 방지
-NF4.5: 개인정보 최소화
-```
-
-#### Usability Requirements
-```
-NF5.1: 인터페이스 직관성 (SUS > 70)
-NF5.2: 온보딩 시간 < 5분
-NF5.3: 오류 메시지 명확성
-NF5.4: 다국어 지원 (향후)
-```
-
----
 
 ## 🏛️ 시스템 아키텍처
 
@@ -273,7 +200,7 @@ NF5.4: 다국어 지원 (향후)
 │  │ PDF Processing Pipeline                           │    │
 │  │ - PDF 다운로드 (requests)                          │    │
 │  │ - 텍스트 추출 (pdfplumber)                         │    │
-│  │ - 청킹 (랭체인)                                    │    │
+│  │ - 청킹 (LangChain)                                    │    │
 │  │ - 임베딩 (Sentence Transformers)                   │    │
 │  │ - 병렬 처리 (concurrent.futures)                   │    │
 │  └────────────────────────────────────────────────────┘    │
@@ -499,80 +426,34 @@ class Chunk(BaseModel):
 
 ---
 
-## 📈 성공 지표 (Success Metrics)
-
-### Quantitative Metrics
-
-| 지표 | 목표 | 측정 방법 |
-|------|------|---------|
-| **응답 시간** | < 5분 | 로그 분석 |
-| **관련성 점수** | > 0.7 | 사용자 평가 |
-| **가용성** | > 99% | 모니터링 대시보드 |
-| **사용자 수** | > 100/월 | 접근 로그 |
-| **오류율** | < 2% | 에러 로그 |
-| **재시도율** | < 10% | 세션 로그 |
-
-### Qualitative Metrics
-
-| 지표 | 목표 | 측정 방법 |
-|------|------|---------|
-| **사용 만족도** | 4.5/5 | 사용자 설문 |
-| **추천 의향** | > 80% | NPS 점수 |
-| **인터페이스 직관성** | SUS > 70 | SUS 설문 |
-| **기능 유용성** | > 90% | 기능 사용도 분석 |
-
----
 
 ## 🔄 개발 및 배포 계획
 
 ### Phase 1: Core Development ✅
-- [x] LangGraph 워크플로우 설계
-- [x] 10개 노드 구현
-- [x] PDF 임베딩 파이프라인 개발
-- [x] ChromaDB 통합
-- [x] Gradio 인터페이스 개발
+- LangGraph 워크플로우 설계
+- 10개 노드 구현
+- PDF 임베딩 파이프라인 개발
+- ChromaDB 통합
+- Gradio 인터페이스 개발
 
 ### Phase 2: Integration & Testing ✅
-- [x] 컴포넌트 통합
-- [x] 엔드-투-엔드 테스트
-- [x] 성능 최적화
-- [x] 오류 처리 강화
+- 컴포넌트 통합
+- 엔드-투-엔드 테스트
+- 성능 최적화
+- 오류 처리 강화
 
 ### Phase 3: Deployment ✅
-- [x] Hugging Face Spaces 배포
-- [x] OpenAI API 통합
-- [x] 환경 변수 설정
-- [x] 모니터링 설정
+- Hugging Face Spaces 배포
+- OpenAI API 통합
+- 환경 변수 설정
+- 모니터링 설정
 
 ### Phase 4: Post-Launch (향후)
-- [ ] 사용자 피드백 수집
-- [ ] 성능 최적화
-- [ ] 기능 확장
-- [ ] 모바일 앱 개발
-
----
-
-## 🎓 학습 및 개선 계획
-
-### 단기 (1개월)
 - 사용자 피드백 수집
-- 버그 픽스
 - 성능 최적화
-- 문서화 개선
+- 기능 확장
+- 모바일 앱 개발
 
-### 중기 (3개월)
-- 다국어 지원 (한국어, 중국어, 일본어)
-- 고급 검색 필터 추가
-- 팀 협업 기능
-- API 제공
-
-### 장기 (6개월)
-- 모바일 앱
-- 클라우드 API 서비스
-- 엔터프라이즈 배포
-- 머신러닝 최적화
-
----
 
 ## 🛠️ 기술 스택 상세
 
@@ -604,83 +485,3 @@ class Chunk(BaseModel):
 - **Hugging Face Spaces**: 클라우드 호스팅
 - **Git**: 버전 관리
 - **Python-dotenv**: 환경 변수 관리
-
----
-
-## 📚 부록: API 명세
-
-### ResearchAssistant.start()
-```python
-def start(question: str, session_id: str = "default") -> dict:
-    """
-    워크플로우를 시작합니다.
-    
-    Args:
-        question: 사용자의 연구 질문
-        session_id: 세션 ID
-    
-    Returns:
-        {
-            "status": "waiting_for_input",
-            "interrupt_stage": 1,
-            "message": "키워드를 확인해주세요",
-            "options": ["확인", "다시"],
-            "keywords": ["keyword1", "keyword2"],
-            "thread_id": "uuid"
-        }
-    """
-```
-
-### ResearchAssistant.continue_with_response()
-```python
-def continue_with_response(user_response: str) -> dict:
-    """
-    사용자 응답을 받아 워크플로우를 계속합니다.
-    
-    Args:
-        user_response: 사용자의 응답
-    
-    Returns:
-        {
-            "status": "completed|waiting_for_input|error",
-            "response": "최종 답변 (완료 시)",
-            "message": "다음 질문 (대기 시)",
-            "keywords": "[새 키워드들]"
-        }
-    """
-```
-
-### ResearchAssistant.run()
-```python
-def run(question: str, paper_count: int = 3) -> str:
-    """
-    자동 실행 모드: Interrupt 없이 전체 과정 자동 수행.
-    
-    Args:
-        question: 사용자의 연구 질문
-        paper_count: 검색할 논문 수 (1-10)
-    
-    Returns:
-        최종 답변 문자열
-    """
-```
-
----
-
-## 📞 Contact & Support
-- jsy6411897@gmail.com
-
-**프로젝트 정보:**
-- GitHub: [URL]
-- Hugging Face: https://huggingface.co/spaces/Jusoyoung/ara-research-assistant
-- 이메일: jsy6411897@gmail.com
-
-**버그 보고 및 기능 요청:**
-- GitHub Issues
-- Email with [BUG] or [FEATURE] prefix
-
----
-
-**Document Version**: 2.3
-**Last Updated**: 2026-01-15
-**Status**: ✅ COMPLETE
