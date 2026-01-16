@@ -132,9 +132,8 @@ python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+(venv)가 터미널에 보이면 성공
 
-# (venv)가 터미널에 보이면 성공! ✅
-(venv) soyoung@soyoung-XPS-15-9530:~/AI-hackathon-ARA$
 
 
 #### Step 3: 의존성 설치
