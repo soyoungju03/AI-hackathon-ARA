@@ -142,6 +142,8 @@ source venv/bin/activate
 
 pip install --upgrade pip
 
+cd ~/AI-hackathon-ARA #프로젝트 디렉토리 안에서 requirements.txt파일 설치 실행!!!
+
 pip install -r requirements.txt
 
 (venv)가 터미널에 보이면 성공
